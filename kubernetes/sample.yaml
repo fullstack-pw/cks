@@ -1,0 +1,335 @@
+# kubernetes/deployment.yaml - Kubernetes deployment configuration for KillerKoda-Local
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: killerkoda
+  labels:
+    app: killerkoda
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: killerkoda-config
+  namespace: killerkoda
+data:
+  # Server settings
+  SERVER_HOST: "0.0.0.0"
+  SERVER_PORT: "8080"
+  ENVIRONMENT: "production"
+  LOG_LEVEL: "info"
+  CORS_ALLOW_ORIGIN: "*"
+
+  # Session settings
+  SESSION_TIMEOUT_MINUTES: "60"
+  MAX_CONCURRENT_SESSIONS: "10"
+  CLEANUP_INTERVAL_MINUTES: "5"
+
+  # VM settings
+  KUBERNETES_VERSION: "1.33.0"
+  VM_CPU_CORES: "2"
+  VM_MEMORY: "2Gi"
+  VM_STORAGE_SIZE: "20Gi"
+  VM_STORAGE_CLASS: "local-path"
+  VM_IMAGE_URL: "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"
+  POD_CIDR: "10.0.0.0/8"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: killerkoda-sa
+  namespace: killerkoda
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: killerkoda-role
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces", "pods", "services", "configmaps", "secrets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["kubevirt.io"]
+    resources: ["virtualmachines", "virtualmachineinstances"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cdi.kubevirt.io"]
+    resources: ["datavolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["subresources.kubevirt.io"]
+    resources: ["virtualmachineinstances/console", "virtualmachineinstances/vnc"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: killerkoda-binding
+subjects:
+  - kind: ServiceAccount
+    name: killerkoda-sa
+    namespace: killerkoda
+roleRef:
+  kind: ClusterRole
+  name: killerkoda-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: killerkoda-backend
+  namespace: killerkoda
+spec:
+  selector:
+    app: killerkoda
+    component: backend
+  ports:
+    - port: 8080
+      targetPort: 8080
+      name: http
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: killerkoda-frontend
+  namespace: killerkoda
+spec:
+  selector:
+    app: killerkoda
+    component: frontend
+  ports:
+    - port: 80
+      targetPort: 3000
+      name: http
+  type: ClusterIP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: killerkoda-ingress
+  namespace: killerkoda
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  rules:
+    - host: killerkoda.local
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: killerkoda-backend
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: killerkoda-frontend
+                port:
+                  number: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: killerkoda-backend
+  namespace: killerkoda
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: killerkoda
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: killerkoda
+        component: backend
+    spec:
+      serviceAccountName: killerkoda-sa
+      containers:
+        - name: backend
+          image: killerkoda/backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: killerkoda-config
+          volumeMounts:
+            - name: templates
+              mountPath: /etc/killerkoda/templates
+            - name: scenarios
+              mountPath: /etc/killerkoda/scenarios
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+            requests:
+              cpu: "500m"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: templates
+          configMap:
+            name: killerkoda-templates
+        - name: scenarios
+          configMap:
+            name: killerkoda-scenarios
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: killerkoda-frontend
+  namespace: killerkoda
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: killerkoda
+      component: frontend
+  template:
+    metadata:
+      labels:
+        app: killerkoda
+        component: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: killerkoda/frontend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NEXT_PUBLIC_API_BASE_URL
+              value: "/api/v1"
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: killerkoda-templates
+  namespace: killerkoda
+data:
+  # This would include the template files
+  # Templates are omitted for brevity but would include all the necessary
+  # template files for VM creation
+  "control-plane-template.yaml": |
+    # Control Plane VM for KillerKoda CKS Environment
+    apiVersion: kubevirt.io/v1
+    kind: VirtualMachine
+    metadata:
+      name: ${CONTROL_PLANE_VM_NAME}
+      namespace: ${SESSION_NAMESPACE}
+      labels:
+        app: killerkoda
+        role: control-plane
+        session: ${SESSION_ID}
+        k8s-version: "${K8S_VERSION}"
+    spec:
+      running: true
+      template:
+        metadata:
+          labels:
+            app: killerkoda
+            role: control-plane
+            session: ${SESSION_ID}
+        spec:
+          domain:
+            cpu:
+              cores: ${CPU_CORES}
+            resources:
+              requests:
+                memory: ${MEMORY}
+            devices:
+              disks:
+                - name: rootdisk
+                  disk:
+                    bus: virtio
+                - name: cloudinitdisk
+                  disk:
+                    bus: virtio
+              interfaces:
+                - name: default
+                  bridge: {}
+          networks:
+            - name: default
+              pod: {}
+          volumes:
+            - name: rootdisk
+              dataVolume:
+                name: ${CONTROL_PLANE_VM_NAME}-rootdisk
+            - name: cloudinitdisk
+              cloudInitNoCloud:
+                secretRef:
+                  name: ${CONTROL_PLANE_VM_NAME}
+                networkData: |
+                  version: 2
+                  ethernets:
+                    enp1s0:
+                      dhcp4: true
+                      dhcp-identifier: mac
+  
+  # Additional templates would be included here...
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: killerkoda-scenarios
+  namespace: killerkoda
+data:
+  # This would include the scenario definitions
+  # A sample scenario structure is included below
+  "categories.yaml": |
+    categories:
+      pod-security:
+        name: "Pod Security"
+        description: "Scenarios focusing on securing pods and containers"
+      network-security:
+        name: "Network Security"
+        description: "Scenarios focusing on secure networking and policies"
+      rbac:
+        name: "RBAC and Authentication"
+        description: "Scenarios focusing on access control and authentication"
+      secrets-management:
+        name: "Secrets Management"
+        description: "Scenarios focusing on secure secrets handling"
+      etcd-security:
+        name: "ETCD Security"
+        description: "Scenarios focusing on securing the Kubernetes data store"
+      runtime-security:
+        name: "Runtime Security"
+        description: "Scenarios focusing on container runtime security"
+
+  # Sample scenario definitions would be added here
