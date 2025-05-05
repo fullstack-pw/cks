@@ -1,11 +1,10 @@
-// cmd/server/main.go - Main application entry point
+// backend/cmd/server/main.go - Main application entry point
 
 package main
 
 import (
 	"context"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,20 +14,39 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/sirupsen/logrus"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
 	"github.com/fullstack-pw/cks/backend/internal/controllers"
+	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/middleware"
 	"github.com/fullstack-pw/cks/backend/internal/scenarios"
 	"github.com/fullstack-pw/cks/backend/internal/sessions"
+	"github.com/fullstack-pw/cks/backend/internal/terminal"
+	"github.com/fullstack-pw/cks/backend/internal/validation"
 )
 
 func main() {
+	// Set up logger
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.JSONFormatter{})
+
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		logger.WithError(err).Fatal("Failed to load configuration")
 	}
+
+	// Set log level based on configuration
+	logLevel, err := logrus.ParseLevel(cfg.LogLevel)
+	if err != nil {
+		logger.WithError(err).Warn("Invalid log level, using info")
+		logLevel = logrus.InfoLevel
+	}
+	logger.SetLevel(logLevel)
 
 	// Set up Gin
 	if cfg.Environment == "production" {
@@ -55,40 +73,84 @@ func main() {
 	})
 	router.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-	// Create session manager
-	sessionManager, err := sessions.NewSessionManager(cfg)
+	// Create Kubernetes client configuration
+	var k8sConfig *rest.Config
+	if cfg.Environment == "development" && os.Getenv("KUBECONFIG") != "" {
+		// Use local kubeconfig in development
+		k8sConfig, err = clientcmd.BuildConfigFromFlags("", os.Getenv("KUBECONFIG"))
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to build kubeconfig")
+		}
+	} else {
+		// Use in-cluster configuration
+		k8sConfig, err = rest.InClusterConfig()
+		if err != nil {
+			logger.WithError(err).Fatal("Failed to create in-cluster config")
+		}
+	}
+
+	// Create Kubernetes client
+	kubeClient, err := kubernetes.NewForConfig(k8sConfig)
 	if err != nil {
-		log.Fatalf("Failed to create session manager: %v", err)
+		logger.WithError(err).Fatal("Failed to create kubernetes client")
+	}
+
+	// Create KubeVirt client
+	kubevirtClient, err := kubevirt.NewClient(k8sConfig)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create kubevirt client")
+	}
+
+	// Create validation engine
+	validationEngine := validation.NewEngine(kubevirtClient)
+
+	// Create terminal manager
+	terminalManager := terminal.NewManager(kubeClient, kubevirtClient, k8sConfig, logger)
+
+	// Create session manager
+	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, validationEngine, logger)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create session manager")
 	}
 	defer sessionManager.Stop()
 
 	// Create scenario manager
-	scenarioManager, err := scenarios.NewScenarioManager(cfg.ScenariosPath)
+	scenarioManager, err := scenarios.NewScenarioManager(cfg.ScenariosPath, logger)
 	if err != nil {
-		log.Fatalf("Failed to create scenario manager: %v", err)
+		logger.WithError(err).Fatal("Failed to create scenario manager")
 	}
 
 	// Register controllers
-	sessionController := controllers.NewSessionController(sessionManager)
+	sessionController := controllers.NewSessionController(sessionManager, logger)
 	sessionController.RegisterRoutes(router)
 
-	scenarioController := controllers.NewScenarioController(scenarioManager)
+	scenarioController := controllers.NewScenarioController(scenarioManager, logger)
 	scenarioController.RegisterRoutes(router)
+
+	terminalController := controllers.NewTerminalController(terminalManager, sessionManager, logger)
+	terminalController.RegisterRoutes(router)
+
+	// Add terminalController.CreateTerminal to the session routes
+	router.POST("/api/v1/sessions/:id/terminals", terminalController.CreateTerminal)
 
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort),
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 60 * time.Second, // Longer timeout for WebSockets
 		IdleTimeout:  60 * time.Second,
 	}
 
 	// Run server in a goroutine
 	go func() {
-		log.Printf("Starting server on %s:%d", cfg.ServerHost, cfg.ServerPort)
+		logger.WithFields(logrus.Fields{
+			"host": cfg.ServerHost,
+			"port": cfg.ServerPort,
+		}).Info("Starting server")
+
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Failed to start server: %v", err)
+			logger.WithError(err).Fatal("Failed to start server")
 		}
 	}()
 
@@ -96,7 +158,7 @@ func main() {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Println("Shutting down server...")
+	logger.Info("Shutting down server...")
 
 	// Create context with timeout for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -104,8 +166,8 @@ func main() {
 
 	// Shutdown server
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		logger.WithError(err).Fatal("Server forced to shutdown")
 	}
 
-	log.Println("Server exited properly")
+	logger.Info("Server exited properly")
 }

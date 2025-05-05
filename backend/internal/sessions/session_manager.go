@@ -1,4 +1,4 @@
-// internal/sessions/session_manager.go - SessionManager implementation
+// backend/internal/sessions/session_manager.go - SessionManager implementation
 
 package sessions
 
@@ -9,50 +9,38 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/models"
+	"github.com/fullstack-pw/cks/backend/internal/validation"
 )
 
 // SessionManager handles the creation, management, and cleanup of user sessions
 type SessionManager struct {
-	sessions       map[string]*models.Session
-	lock           sync.RWMutex
-	clientset      *kubernetes.Clientset
-	kubevirtClient *kubevirt.Client
-	config         *config.Config
-	stopCh         chan struct{}
+	sessions         map[string]*models.Session
+	lock             sync.RWMutex
+	clientset        *kubernetes.Clientset
+	kubevirtClient   *kubevirt.Client
+	config           *config.Config
+	validationEngine *validation.Engine
+	logger           *logrus.Logger
+	stopCh           chan struct{}
 }
 
 // NewSessionManager creates a new session manager
-func NewSessionManager(cfg *config.Config) (*SessionManager, error) {
-	// Create kubernetes client
-	k8sConfig, err := rest.InClusterConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create in-cluster config: %v", err)
-	}
-
-	clientset, err := kubernetes.NewForConfig(k8sConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create clientset: %v", err)
-	}
-
-	// Create KubeVirt client
-	kubevirtClient, err := kubevirt.NewClient(k8sConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create kubevirt client: %v", err)
-	}
-
+func NewSessionManager(cfg *config.Config, clientset *kubernetes.Clientset, kubevirtClient *kubevirt.Client, validationEngine *validation.Engine, logger *logrus.Logger) (*SessionManager, error) {
 	sm := &SessionManager{
-		sessions:       make(map[string]*models.Session),
-		clientset:      clientset,
-		kubevirtClient: kubevirtClient,
-		config:         cfg,
-		stopCh:         make(chan struct{}),
+		sessions:         make(map[string]*models.Session),
+		clientset:        clientset,
+		kubevirtClient:   kubevirtClient,
+		config:           cfg,
+		validationEngine: validationEngine,
+		logger:           logger,
+		stopCh:           make(chan struct{}),
 	}
 
 	// Start session cleanup goroutine
@@ -72,10 +60,29 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 	}
 
 	// Generate session ID
-	sessionID := uuid.New().String()
+	sessionID := uuid.New().String()[:8] // Short ID for better user experience
 
 	// Create namespace name
 	namespace := fmt.Sprintf("user-session-%s", sessionID)
+
+	// Load scenario to get task info
+	var tasks []models.TaskStatus
+	if scenarioID != "" {
+		scenario, err := sm.loadScenario(ctx, scenarioID)
+		if err != nil {
+			sm.logger.WithError(err).WithField("scenarioID", scenarioID).Warn("Failed to load scenario")
+			// Continue without scenario info
+		} else if scenario != nil {
+			// Initialize task statuses
+			tasks = make([]models.TaskStatus, 0, len(scenario.Tasks))
+			for _, task := range scenario.Tasks {
+				tasks = append(tasks, models.TaskStatus{
+					ID:     task.ID,
+					Status: "pending",
+				})
+			}
+		}
+	}
 
 	// Create session object
 	session := &models.Session{
@@ -87,19 +94,31 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 		ExpirationTime:   time.Now().Add(time.Duration(sm.config.SessionTimeoutMinutes) * time.Minute),
 		ControlPlaneVM:   fmt.Sprintf("cks-control-plane-%s", sessionID),
 		WorkerNodeVM:     fmt.Sprintf("cks-worker-node-%s", sessionID),
-		Tasks:            make([]models.TaskStatus, 0),
+		Tasks:            tasks,
 		TerminalSessions: make(map[string]string),
 	}
 
 	// Store session
 	sm.sessions[sessionID] = session
 
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":  sessionID,
+		"namespace":  namespace,
+		"scenarioID": scenarioID,
+	}).Info("Creating new session")
+
 	// Create namespace asynchronously
 	go func() {
 		err := sm.provisionEnvironment(ctx, session)
 		if err != nil {
+			sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Failed to provision environment")
+
+			// Update session status
+			sm.lock.Lock()
+			sm.lock.Lock()
 			session.Status = models.SessionStatusFailed
 			session.StatusMessage = fmt.Sprintf("Failed to provision environment: %v", err)
+			sm.lock.Unlock()
 			return
 		}
 	}()
@@ -136,24 +155,28 @@ func (sm *SessionManager) ListSessions() []*models.Session {
 // DeleteSession deletes a session and cleans up its resources
 func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) error {
 	sm.lock.Lock()
-	defer sm.lock.Unlock()
-
 	session, ok := sm.sessions[sessionID]
 	if !ok {
+		sm.lock.Unlock()
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
+	sm.lock.Unlock()
+
+	sm.logger.WithField("sessionID", sessionID).Info("Deleting session")
 
 	// Clean up resources asynchronously
 	go func() {
 		err := sm.cleanupEnvironment(ctx, session)
 		if err != nil {
 			// Log error but continue with deletion
-			fmt.Printf("Error cleaning up session %s: %v\n", sessionID, err)
+			sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Error cleaning up session")
 		}
-	}()
 
-	// Remove from session map
-	delete(sm.sessions, sessionID)
+		// Remove from session map
+		sm.lock.Lock()
+		delete(sm.sessions, sessionID)
+		sm.lock.Unlock()
+	}()
 
 	return nil
 }
@@ -171,6 +194,11 @@ func (sm *SessionManager) ExtendSession(sessionID string, duration time.Duration
 	// Extend expiration time
 	session.ExpirationTime = time.Now().Add(duration)
 
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":      sessionID,
+		"expirationTime": session.ExpirationTime,
+	}).Info("Session extended")
+
 	return nil
 }
 
@@ -185,22 +213,83 @@ func (sm *SessionManager) UpdateTaskStatus(sessionID, taskID string, status stri
 	}
 
 	// Find task and update status
+	found := false
 	for i, task := range session.Tasks {
 		if task.ID == taskID {
 			session.Tasks[i].Status = status
 			session.Tasks[i].ValidationTime = time.Now()
-			return nil
+			found = true
+			break
 		}
 	}
 
 	// Task not found, add it
-	session.Tasks = append(session.Tasks, models.TaskStatus{
-		ID:             taskID,
-		Status:         status,
-		ValidationTime: time.Now(),
-	})
+	if !found {
+		session.Tasks = append(session.Tasks, models.TaskStatus{
+			ID:             taskID,
+			Status:         status,
+			ValidationTime: time.Now(),
+		})
+	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"taskID":    taskID,
+		"status":    status,
+	}).Info("Task status updated")
 
 	return nil
+}
+
+// ValidateTask validates a task in a session
+func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID string) (*models.ValidationResponse, error) {
+	// Get session
+	session, err := sm.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get scenario to load task validation rules
+	scenario, err := sm.loadScenario(ctx, session.ScenarioID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load scenario: %w", err)
+	}
+
+	// Find task in scenario
+	var taskToValidate *models.Task
+	for _, task := range scenario.Tasks {
+		if task.ID == taskID {
+			taskToValidate = &task
+			break
+		}
+	}
+
+	if taskToValidate == nil {
+		return nil, fmt.Errorf("task not found in scenario: %s", taskID)
+	}
+
+	// Validate task
+	result, err := sm.validationEngine.ValidateTask(ctx, session, *taskToValidate)
+	if err != nil {
+		return nil, fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Update task status
+	status := "failed"
+	if result.Success {
+		status = "completed"
+	}
+
+	err = sm.UpdateTaskStatus(sessionID, taskID, status)
+	if err != nil {
+		sm.logger.WithError(err).WithFields(logrus.Fields{
+			"sessionID": sessionID,
+			"taskID":    taskID,
+		}).Error("Failed to update task status")
+		// Continue despite error
+	}
+
+	return result, nil
 }
 
 // RegisterTerminalSession registers a terminal session for a VM
@@ -214,6 +303,13 @@ func (sm *SessionManager) RegisterTerminalSession(sessionID, terminalID, target 
 	}
 
 	session.TerminalSessions[terminalID] = target
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":  sessionID,
+		"terminalID": terminalID,
+		"target":     target,
+	}).Debug("Terminal session registered")
+
 	return nil
 }
 
@@ -228,63 +324,80 @@ func (sm *SessionManager) UnregisterTerminalSession(sessionID, terminalID string
 	}
 
 	delete(session.TerminalSessions, terminalID)
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":  sessionID,
+		"terminalID": terminalID,
+	}).Debug("Terminal session unregistered")
+
 	return nil
 }
 
 // provisionEnvironment sets up the Kubernetes environment for a session
 func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *models.Session) error {
 	// Update session status
+	sm.lock.Lock()
 	session.Status = models.SessionStatusProvisioning
+	sm.lock.Unlock()
+
+	sm.logger.WithField("sessionID", session.ID).Info("Provisioning environment")
 
 	// Create namespace
 	err := sm.createNamespace(ctx, session.Namespace)
 	if err != nil {
-		return fmt.Errorf("failed to create namespace: %v", err)
+		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
 	// Set up resource quotas
 	err = sm.setupResourceQuotas(ctx, session.Namespace)
 	if err != nil {
-		return fmt.Errorf("failed to set up resource quotas: %v", err)
+		return fmt.Errorf("failed to set up resource quotas: %w", err)
 	}
 
 	// Create KubeVirt VMs
 	err = sm.kubevirtClient.CreateCluster(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
 	if err != nil {
-		return fmt.Errorf("failed to create VMs: %v", err)
+		return fmt.Errorf("failed to create VMs: %w", err)
 	}
 
 	// Wait for VMs to be ready
 	err = sm.kubevirtClient.WaitForVMsReady(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
 	if err != nil {
-		return fmt.Errorf("failed waiting for VMs: %v", err)
+		return fmt.Errorf("failed waiting for VMs: %w", err)
 	}
 
 	// Initialize scenario resources if defined
 	if session.ScenarioID != "" {
 		err = sm.initializeScenario(ctx, session)
 		if err != nil {
-			return fmt.Errorf("failed to initialize scenario: %v", err)
+			return fmt.Errorf("failed to initialize scenario: %w", err)
 		}
 	}
 
 	// Update session status
+	sm.lock.Lock()
 	session.Status = models.SessionStatusRunning
+	sm.lock.Unlock()
+
+	sm.logger.WithField("sessionID", session.ID).Info("Environment provisioned successfully")
+
 	return nil
 }
 
 // createNamespace creates a new namespace for the session
 func (sm *SessionManager) createNamespace(ctx context.Context, namespace string) error {
+	sm.logger.WithField("namespace", namespace).Info("Creating namespace")
+
 	// Create namespace with labels
-	ns := &metav1.ObjectMeta{
+	ns := metav1.ObjectMeta{
 		Name: namespace,
 		Labels: map[string]string{
 			"killerkoda.io/session": "true",
 		},
 	}
 
-	_, err := sm.clientset.CoreV1().Namespaces().Create(ctx, &metav1.Namespace{
-		ObjectMeta: *ns,
+	_, err := sm.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: ns,
 	}, metav1.CreateOptions{})
 
 	return err
@@ -292,34 +405,77 @@ func (sm *SessionManager) createNamespace(ctx context.Context, namespace string)
 
 // setupResourceQuotas creates resource quotas for the session namespace
 func (sm *SessionManager) setupResourceQuotas(ctx context.Context, namespace string) error {
-	// Implementation for resource quotas
-	// This would create CPU, memory, and storage quotas for the namespace
-	return nil
+	sm.logger.WithField("namespace", namespace).Info("Setting up resource quotas")
+
+	// Create a resource quota with limits
+	quota := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "session-quota",
+		},
+		Spec: corev1.ResourceQuotaSpec{
+			Hard: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("4"),
+				corev1.ResourceMemory: resource.MustParse("8Gi"),
+				corev1.ResourcePods:   resource.MustParse("10"),
+			},
+		},
+	}
+
+	_, err := sm.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+	return err
+}
+
+// loadScenario loads a scenario by ID
+func (sm *SessionManager) loadScenario(ctx context.Context, scenarioID string) (*models.Scenario, error) {
+	// Use scenario manager to load scenario
+	// This is a placeholder - in a real implementation, this would use the scenario manager
+	return nil, nil
 }
 
 // initializeScenario sets up the initial resources for a scenario
 func (sm *SessionManager) initializeScenario(ctx context.Context, session *models.Session) error {
-	// Load scenario definition
-	// Apply scenario resources
-	// Initialize task statuses
+	// This is a placeholder - in a real implementation, this would:
+	// 1. Load scenario definition
+	// 2. Create any required resources
+	// 3. Run setup scripts
+	// 4. Wait for everything to be ready
 	return nil
 }
 
 // cleanupEnvironment cleans up the Kubernetes resources for a session
 func (sm *SessionManager) cleanupEnvironment(ctx context.Context, session *models.Session) error {
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": session.ID,
+		"namespace": session.Namespace,
+	}).Info("Cleaning up environment")
+
+	// Delete VMs first to ensure clean shutdown
+	err := sm.kubevirtClient.DeleteVMs(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	if err != nil {
+		sm.logger.WithError(err).WithField("sessionID", session.ID).Error("Failed to delete VMs")
+		// Continue with namespace deletion
+	}
+
 	// Delete namespace (which will delete all resources in it)
-	err := sm.clientset.CoreV1().Namespaces().Delete(ctx, session.Namespace, metav1.DeleteOptions{})
-	return err
+	err = sm.clientset.CoreV1().Namespaces().Delete(ctx, session.Namespace, metav1.DeleteOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to delete namespace: %w", err)
+	}
+
+	sm.logger.WithField("sessionID", session.ID).Info("Environment cleaned up successfully")
+	return nil
 }
 
 // cleanupExpiredSessions periodically checks and cleans up expired sessions
 func (sm *SessionManager) cleanupExpiredSessions() {
-	ticker := time.NewTicker(time.Minute)
+	ticker := time.NewTicker(time.Duration(sm.config.CleanupIntervalMinutes) * time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ticker.C:
+			sm.logger.Debug("Running session cleanup")
+
 			sm.lock.Lock()
 			expiredSessions := make([]string, 0)
 			now := time.Now()
@@ -334,10 +490,10 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 
 			// Clean up expired sessions
 			for _, id := range expiredSessions {
-				fmt.Printf("Cleaning up expired session: %s\n", id)
+				sm.logger.WithField("sessionID", id).Info("Cleaning up expired session")
 				err := sm.DeleteSession(context.Background(), id)
 				if err != nil {
-					fmt.Printf("Error deleting expired session %s: %v\n", id, err)
+					sm.logger.WithError(err).WithField("sessionID", id).Error("Error deleting expired session")
 				}
 			}
 		case <-sm.stopCh:
@@ -349,4 +505,5 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 // Stop stops the session manager and releases resources
 func (sm *SessionManager) Stop() {
 	close(sm.stopCh)
+	sm.logger.Info("Session manager stopped")
 }
