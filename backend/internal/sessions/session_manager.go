@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
@@ -18,6 +19,7 @@ import (
 	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/fullstack-pw/cks/backend/internal/validation"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
@@ -51,7 +53,6 @@ func NewSessionManager(cfg *config.Config, clientset *kubernetes.Clientset, kube
 	return sm, nil
 }
 
-// CreateSession creates a new user session for a scenario
 func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) (*models.Session, error) {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
@@ -109,14 +110,17 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 		"scenarioID": scenarioID,
 	}).Info("Creating new session")
 
-	// Create namespace asynchronously
+	// Create namespace asynchronously with a new background context
 	go func() {
-		err := sm.provisionEnvironment(ctx, session)
+		// Create a new background context with a longer timeout
+		provisionCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		err := sm.provisionEnvironment(provisionCtx, session)
 		if err != nil {
 			sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Failed to provision environment")
 
 			// Update session status
-			sm.lock.Lock()
 			sm.lock.Lock()
 			session.Status = models.SessionStatusFailed
 			session.StatusMessage = fmt.Sprintf("Failed to provision environment: %v", err)
@@ -335,7 +339,6 @@ func (sm *SessionManager) UnregisterTerminalSession(sessionID, terminalID string
 	return nil
 }
 
-// provisionEnvironment sets up the Kubernetes environment for a session
 func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *models.Session) error {
 	// Update session status
 	sm.lock.Lock()
@@ -344,33 +347,60 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 
 	sm.logger.WithField("sessionID", session.ID).Info("Provisioning environment")
 
+	// Verify KubeVirt is available
+	err := sm.kubevirtClient.VerifyKubeVirtAvailable(ctx)
+	if err != nil {
+		sm.logger.WithError(err).Error("Failed to verify KubeVirt availability")
+		return fmt.Errorf("failed to verify KubeVirt availability: %w", err)
+	}
+
 	// Create namespace
-	err := sm.createNamespace(ctx, session.Namespace)
+	namespaceCtx, cancelNamespace := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelNamespace()
+	err = sm.createNamespace(namespaceCtx, session.Namespace)
 	if err != nil {
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
+	// Add a short delay to ensure the namespace is fully created
+	time.Sleep(2 * time.Second)
+
 	// Set up resource quotas
-	err = sm.setupResourceQuotas(ctx, session.Namespace)
+	quotaCtx, cancelQuota := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelQuota()
+	sm.logger.WithField("namespace", session.Namespace).Info("Setting up resource quotas")
+	err = sm.setupResourceQuotas(quotaCtx, session.Namespace)
 	if err != nil {
 		return fmt.Errorf("failed to set up resource quotas: %w", err)
 	}
 
+	// Add a short delay to ensure resource quotas are applied
+	time.Sleep(2 * time.Second)
+
 	// Create KubeVirt VMs
-	err = sm.kubevirtClient.CreateCluster(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	vmCtx, cancelVM := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancelVM()
+	sm.logger.WithField("sessionID", session.ID).Info("Creating KubeVirt VMs")
+	err = sm.kubevirtClient.CreateCluster(vmCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
 	if err != nil {
 		return fmt.Errorf("failed to create VMs: %w", err)
 	}
 
 	// Wait for VMs to be ready
-	err = sm.kubevirtClient.WaitForVMsReady(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	waitCtx, cancelWait := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancelWait()
+	sm.logger.WithField("sessionID", session.ID).Info("Waiting for VMs to be ready")
+	err = sm.kubevirtClient.WaitForVMsReady(waitCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
 	if err != nil {
 		return fmt.Errorf("failed waiting for VMs: %w", err)
 	}
 
 	// Initialize scenario resources if defined
 	if session.ScenarioID != "" {
-		err = sm.initializeScenario(ctx, session)
+		scenarioCtx, cancelScenario := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancelScenario()
+		sm.logger.WithField("sessionID", session.ID).Info("Initializing scenario")
+		err = sm.initializeScenario(scenarioCtx, session)
 		if err != nil {
 			return fmt.Errorf("failed to initialize scenario: %w", err)
 		}
@@ -382,7 +412,6 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 	sm.lock.Unlock()
 
 	sm.logger.WithField("sessionID", session.ID).Info("Environment provisioned successfully")
-
 	return nil
 }
 
@@ -404,7 +433,6 @@ func (sm *SessionManager) createNamespace(ctx context.Context, namespace string)
 	return err
 }
 
-// setupResourceQuotas creates resource quotas for the session namespace
 func (sm *SessionManager) setupResourceQuotas(ctx context.Context, namespace string) error {
 	sm.logger.WithField("namespace", namespace).Info("Setting up resource quotas")
 
@@ -422,7 +450,44 @@ func (sm *SessionManager) setupResourceQuotas(ctx context.Context, namespace str
 		},
 	}
 
-	_, err := sm.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+	// Implement retry with backoff
+	backoff := wait.Backoff{
+		Steps:    5,
+		Duration: 1 * time.Second,
+		Factor:   2.0,
+		Jitter:   0.1,
+	}
+
+	var lastErr error
+	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
+		_, err := sm.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+		if err == nil {
+			return true, nil // Success
+		}
+
+		if errors.IsAlreadyExists(err) {
+			sm.logger.WithField("namespace", namespace).Warn("Resource quota already exists")
+			return true, nil // Already exists, consider success
+		}
+
+		// Check for namespace not found
+		if errors.IsNotFound(err) {
+			sm.logger.WithField("namespace", namespace).Error("Namespace not found while creating resource quota")
+			// This is a terminal error, no need to retry
+			return false, err
+		}
+
+		// Record the error and retry
+		lastErr = err
+		sm.logger.WithError(err).WithField("namespace", namespace).Warn("Failed to create resource quota, retrying...")
+		return false, nil // Retry
+	})
+
+	if err == wait.ErrWaitTimeout {
+		return fmt.Errorf("failed to create resource quota after retries: %v", lastErr)
+	}
+
+	sm.logger.WithField("namespace", namespace).Info("Resource quota created successfully")
 	return err
 }
 

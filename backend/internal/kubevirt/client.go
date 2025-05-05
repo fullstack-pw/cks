@@ -22,6 +22,7 @@ import (
 	"kubevirt.io/client-go/kubecli"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
+	"github.com/sirupsen/logrus"
 )
 
 // Client represents a KubeVirt client for managing VMs
@@ -68,25 +69,34 @@ func NewClient(restConfig *rest.Config) (*Client, error) {
 	}, nil
 }
 
-// CreateCluster creates a new Kubernetes cluster with a control plane and worker nodes
 func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName, workerNodeName string) error {
+	// Add log for tracking
+	logrus.WithFields(logrus.Fields{
+		"namespace":    namespace,
+		"controlPlane": controlPlaneName,
+		"workerNode":   workerNodeName,
+	}).Info("Starting VM cluster creation")
+
 	// Create secret with cloud-init data for control plane
 	err := c.createCloudInitSecret(ctx, namespace, controlPlaneName, "control-plane")
 	if err != nil {
 		return fmt.Errorf("failed to create control plane cloud-init secret: %v", err)
 	}
+	logrus.Info("Created control plane cloud-init secret")
 
 	// Create control plane VM
 	err = c.createVM(ctx, namespace, controlPlaneName, "control-plane")
 	if err != nil {
 		return fmt.Errorf("failed to create control plane VM: %v", err)
 	}
+	logrus.Info("Created control plane VM")
 
 	// Wait for control plane to be ready before creating worker
 	err = c.WaitForVMReady(ctx, namespace, controlPlaneName)
 	if err != nil {
 		return fmt.Errorf("control plane VM failed to become ready: %v", err)
 	}
+	logrus.Info("Control plane VM is ready")
 
 	// Get join command from control plane
 	joinCommand, err := c.getJoinCommand(ctx, namespace, controlPlaneName)
@@ -222,23 +232,45 @@ func (c *Client) WaitForVMsReady(ctx context.Context, namespace string, vmNames 
 	return nil
 }
 
-// WaitForVMReady waits for a VM to be ready
 func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) error {
-	return wait.PollImmediate(5*time.Second, 15*time.Minute, func() (bool, error) {
+	logrus.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmName":    vmName,
+	}).Info("Waiting for VM to become ready")
+
+	return wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(context.Context) (bool, error) {
 		vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
 			if errors.IsNotFound(err) {
+				logrus.WithField("vmName", vmName).Debug("VM not found yet, retrying...")
 				return false, nil
 			}
-			return false, err
+			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VM status")
+			return false, nil // Keep trying despite errors
 		}
 
 		if vm.Status.Ready {
+			logrus.WithField("vmName", vmName).Info("VM is ready")
 			return true, nil
 		}
 
+		logrus.WithField("vmName", vmName).Debug("VM not ready yet, retrying...")
 		return false, nil
 	})
+}
+
+func (c *Client) VerifyKubeVirtAvailable(ctx context.Context) error {
+	logrus.Info("Verifying KubeVirt availability")
+
+	// Try to list VMs in the default namespace as a check
+	_, err := c.virtClient.VirtualMachine("default").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		logrus.WithError(err).Error("Failed to access KubeVirt API")
+		return fmt.Errorf("failed to access KubeVirt API: %w", err)
+	}
+
+	logrus.Info("KubeVirt API is accessible")
+	return nil
 }
 
 // getJoinCommand gets the kubeadm join command from the control plane
