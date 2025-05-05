@@ -1,31 +1,37 @@
-// frontend/components/ScenarioFilter.js - Filtering component for scenarios
+// frontend/components/ScenarioFilter.js - Fixed ScenarioFilter component
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-const ScenarioFilter = ({ categories, onFilterChange }) => {
+const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
     const [category, setCategory] = useState('');
     const [difficulty, setDifficulty] = useState('');
     const [search, setSearch] = useState('');
 
+    // Apply filter changes
+    const applyFilters = () => {
+        if (onFilterChange) {
+            onFilterChange({ category, difficulty, search });
+        }
+    };
+
+    // Apply filters whenever filter values change
+    useEffect(() => {
+        applyFilters();
+    }, [category, difficulty, search]);
+
     // Handle category change
     const handleCategoryChange = (e) => {
-        const value = e.target.value;
-        setCategory(value);
-        onFilterChange({ category: value, difficulty, search });
+        setCategory(e.target.value);
     };
 
     // Handle difficulty change
     const handleDifficultyChange = (e) => {
-        const value = e.target.value;
-        setDifficulty(value);
-        onFilterChange({ category, difficulty: value, search });
+        setDifficulty(e.target.value);
     };
 
-    // Handle search input change
+    // Handle search input change with debounce
     const handleSearchChange = (e) => {
-        const value = e.target.value;
-        setSearch(value);
-        onFilterChange({ category, difficulty, search: value });
+        setSearch(e.target.value);
     };
 
     // Clear all filters
@@ -33,32 +39,25 @@ const ScenarioFilter = ({ categories, onFilterChange }) => {
         setCategory('');
         setDifficulty('');
         setSearch('');
-        onFilterChange({ category: '', difficulty: '', search: '' });
     };
 
     return (
         <div className="bg-white shadow rounded-lg mb-6">
             <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">Filter Scenarios</h3>
+                <h3 className="text-lg font-medium text-gray-900 mb-4">Filter Scenarios</h3>
 
-                <div className="grid grid-cols-1 gap-y-4 gap-x-4 sm:grid-cols-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     {/* Search input */}
-                    <div className="sm:col-span-6">
-                        <label htmlFor="search" className="block text-sm font-medium text-gray-700">
+                    <div>
+                        <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-1">
                             Search
                         </label>
-                        <div className="mt-1 relative rounded-md shadow-sm">
-                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                                <svg className="h-5 w-5 text-gray-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
-                                    <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
-                                </svg>
-                            </div>
+                        <div className="relative rounded-md shadow-sm">
                             <input
                                 type="text"
-                                name="search"
                                 id="search"
-                                className="focus:ring-indigo-500 focus:border-indigo-500 block w-full pl-10 sm:text-sm border-gray-300 rounded-md"
-                                placeholder="Search by title or description"
+                                className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                                placeholder="Search scenarios..."
                                 value={search}
                                 onChange={handleSearchChange}
                             />
@@ -66,19 +65,18 @@ const ScenarioFilter = ({ categories, onFilterChange }) => {
                     </div>
 
                     {/* Category select */}
-                    <div className="sm:col-span-3">
-                        <label htmlFor="category" className="block text-sm font-medium text-gray-700">
+                    <div>
+                        <label htmlFor="category" className="block text-sm font-medium text-gray-700 mb-1">
                             Category
                         </label>
                         <select
                             id="category"
-                            name="category"
-                            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                             value={category}
                             onChange={handleCategoryChange}
                         >
                             <option value="">All Categories</option>
-                            {categories && Object.entries(categories).map(([key, value]) => (
+                            {Object.entries(categories).map(([key, value]) => (
                                 <option key={key} value={key}>
                                     {value}
                                 </option>
@@ -87,14 +85,13 @@ const ScenarioFilter = ({ categories, onFilterChange }) => {
                     </div>
 
                     {/* Difficulty select */}
-                    <div className="sm:col-span-3">
-                        <label htmlFor="difficulty" className="block text-sm font-medium text-gray-700">
+                    <div>
+                        <label htmlFor="difficulty" className="block text-sm font-medium text-gray-700 mb-1">
                             Difficulty
                         </label>
                         <select
                             id="difficulty"
-                            name="difficulty"
-                            className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
                             value={difficulty}
                             onChange={handleDifficultyChange}
                         >
