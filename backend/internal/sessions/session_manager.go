@@ -17,6 +17,8 @@ import (
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/fullstack-pw/cks/backend/internal/validation"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 // SessionManager handles the creation, management, and cleanup of user sessions
@@ -389,17 +391,16 @@ func (sm *SessionManager) createNamespace(ctx context.Context, namespace string)
 	sm.logger.WithField("namespace", namespace).Info("Creating namespace")
 
 	// Create namespace with labels
-	ns := metav1.ObjectMeta{
-		Name: namespace,
-		Labels: map[string]string{
-			"killerkoda.io/session": "true",
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: namespace,
+			Labels: map[string]string{
+				"killerkoda.io/session": "true",
+			},
 		},
 	}
 
-	_, err := sm.clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: ns,
-	}, metav1.CreateOptions{})
-
+	_, err := sm.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 	return err
 }
 

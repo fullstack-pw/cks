@@ -172,7 +172,7 @@ func (sc *SessionController) CreateTerminal(c *gin.Context) {
 // AttachTerminal handles WebSocket connection to a terminal
 func (sc *SessionController) AttachTerminal(c *gin.Context) {
 	terminalID := c.Param("id")
-
+	print(terminalID)
 	// In a real implementation, this would handle WebSocket upgrade and proxying
 	// For simplicity, the logic is omitted here
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "WebSocket terminal attachment not implemented in this example"})

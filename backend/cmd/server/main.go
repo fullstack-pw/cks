@@ -115,16 +115,16 @@ func main() {
 	defer sessionManager.Stop()
 
 	// Create scenario manager
-	scenarioManager, err := scenarios.NewScenarioManager(cfg.ScenariosPath, logger)
+	scenarioManager, err := scenarios.NewScenarioManager(cfg.ScenariosPath)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create scenario manager")
 	}
 
 	// Register controllers
-	sessionController := controllers.NewSessionController(sessionManager, logger)
+	sessionController := controllers.NewSessionController(sessionManager)
 	sessionController.RegisterRoutes(router)
 
-	scenarioController := controllers.NewScenarioController(scenarioManager, logger)
+	scenarioController := controllers.NewScenarioController(scenarioManager)
 	scenarioController.RegisterRoutes(router)
 
 	terminalController := controllers.NewTerminalController(terminalManager, sessionManager, logger)

@@ -1,4 +1,4 @@
-// internal/kubevirt/client.go - KubeVirt client for VM management
+// Updated client.go implementation to fix build errors
 
 package kubevirt
 
@@ -16,7 +16,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/remotecommand"
 	"kubevirt.io/client-go/kubecli"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
@@ -27,6 +29,7 @@ type Client struct {
 	kubeClient    kubernetes.Interface
 	virtClient    kubecli.KubevirtClient
 	config        *config.Config
+	restConfig    *rest.Config // Store the REST config
 	templateCache map[string]*template.Template
 }
 
@@ -60,6 +63,7 @@ func NewClient(restConfig *rest.Config) (*Client, error) {
 		kubeClient:    kubeClient,
 		virtClient:    virtClient,
 		config:        cfg,
+		restConfig:    restConfig, // Store the REST config
 		templateCache: templateCache,
 	}, nil
 }
@@ -221,7 +225,7 @@ func (c *Client) WaitForVMsReady(ctx context.Context, namespace string, vmNames 
 // WaitForVMReady waits for a VM to be ready
 func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) error {
 	return wait.PollImmediate(5*time.Second, 15*time.Minute, func() (bool, error) {
-		vm, err := c.virtClient.VirtualMachine(namespace).Get(vmName, &metav1.GetOptions{})
+		vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
 			if errors.IsNotFound(err) {
 				return false, nil
@@ -243,7 +247,7 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 	var joinCommand string
 	err := wait.PollImmediate(10*time.Second, 5*time.Minute, func() (bool, error) {
 		// Execute command to get join command
-		pod, err := c.getVMPodName(ctx, namespace, controlPlaneName)
+		pod, err := c.GetVMPodName(ctx, namespace, controlPlaneName)
 		if err != nil {
 			return false, nil // Keep trying
 		}
@@ -285,7 +289,7 @@ func (c *Client) getVMIP(ctx context.Context, namespace, vmName string) string {
 	var ip string
 	err := wait.PollImmediate(5*time.Second, 2*time.Minute, func() (bool, error) {
 		// Get VM instance
-		vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(vmName, &metav1.GetOptions{})
+		vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
 			return false, nil // Keep trying
 		}
@@ -312,9 +316,9 @@ func (c *Client) getVMIP(ctx context.Context, namespace, vmName string) string {
 	return ip
 }
 
-// getVMPodName gets the name of the pod associated with a VM
-func (c *Client) getVMPodName(ctx context.Context, namespace, vmName string) (string, error) {
-	vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(vmName, &metav1.GetOptions{})
+// GetVMPodName gets the name of the pod associated with a VM
+func (c *Client) GetVMPodName(ctx context.Context, namespace, vmName string) (string, error) {
+	vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -352,16 +356,16 @@ func (c *Client) executeCommand(ctx context.Context, namespace, pod, container s
 			Stdout:    true,
 			Stderr:    true,
 			TTY:       false,
-		}, metav1.ParameterCodec)
+		}, scheme.ParameterCodec)
 
-	// Execute command
-	exec, err := kubecli.NewKubeExec(req, c.kubeClient.CoreV1().RESTClient())
+	// Execute command - Use the stored restConfig
+	executor, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
 	if err != nil {
 		return "", "", err
 	}
 
 	var stdout, stderr strings.Builder
-	err = exec.Stream(ctx, kubecli.StreamOptions{
+	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
 		Stdout: &stdout,
 		Stderr: &stderr,
 	})
@@ -373,7 +377,7 @@ func (c *Client) executeCommand(ctx context.Context, namespace, pod, container s
 func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...string) error {
 	for _, vmName := range vmNames {
 		// Delete VM
-		err := c.virtClient.VirtualMachine(namespace).Delete(vmName, &metav1.DeleteOptions{})
+		err := c.virtClient.VirtualMachine(namespace).Delete(ctx, vmName, metav1.DeleteOptions{})
 		if err != nil && !errors.IsNotFound(err) {
 			return fmt.Errorf("failed to delete VM %s: %v", vmName, err)
 		}
@@ -397,7 +401,7 @@ func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...str
 
 // GetVMStatus gets the status of a VM
 func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (string, error) {
-	vm, err := c.virtClient.VirtualMachine(namespace).Get(vmName, &metav1.GetOptions{})
+	vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -415,7 +419,7 @@ func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (str
 
 // ExecuteCommandInVM executes a command in a VM
 func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string) (string, error) {
-	pod, err := c.getVMPodName(ctx, namespace, vmName)
+	pod, err := c.GetVMPodName(ctx, namespace, vmName)
 	if err != nil {
 		return "", err
 	}
