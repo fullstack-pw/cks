@@ -120,7 +120,7 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create scenario manager")
 	}
 
-	// Register controllers
+	// In main.go, update the controller registration section
 	sessionController := controllers.NewSessionController(sessionManager)
 	sessionController.RegisterRoutes(router)
 
@@ -130,8 +130,8 @@ func main() {
 	terminalController := controllers.NewTerminalController(terminalManager, sessionManager, logger)
 	terminalController.RegisterRoutes(router)
 
-	// Add terminalController.CreateTerminal to the session routes
-	router.POST("/api/v1/sessions/:id/terminals", terminalController.CreateTerminal)
+	// Remove this line since it's already handled in terminalController.RegisterRoutes
+	// router.POST("/api/v1/sessions/:id/terminals", terminalController.CreateTerminal)
 
 	// Create HTTP server
 	server := &http.Server{
