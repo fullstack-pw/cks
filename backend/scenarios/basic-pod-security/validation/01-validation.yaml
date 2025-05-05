@@ -1,0 +1,32 @@
+criteria:
+  - type: resource_exists
+    resource:
+      kind: Pod
+      name: secure-pod
+      namespace: default
+    error_message: "Pod 'secure-pod' does not exist in the default namespace"
+
+  - type: resource_property
+    resource:
+      kind: Pod
+      name: secure-pod
+      namespace: default
+    property: .spec.securityContext.runAsUser
+    condition: equals
+    value: 1000
+    error_message: "Pod 'secure-pod' is not configured to run as user ID 1000"
+
+  - type: resource_property
+    resource:
+      kind: Pod
+      name: secure-pod
+      namespace: default
+    property: .spec.containers[0].securityContext.allowPrivilegeEscalation
+    condition: equals
+    value: false
+    error_message: "Container in 'secure-pod' does not have privilege escalation disabled"
+
+  - type: command
+    command: "kubectl get pod secure-pod -o jsonpath='{.status.phase}'"
+    output_match: Running
+    error_message: "Pod 'secure-pod' is not in Running state"

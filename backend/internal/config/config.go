@@ -52,7 +52,7 @@ func LoadConfig() (*Config, error) {
 		CleanupIntervalMinutes: getEnvAsInt("CLEANUP_INTERVAL_MINUTES", 5),
 
 		// VM defaults
-		TemplatePath:      getEnv("TEMPLATE_PATH", "/etc/killerkoda/templates"),
+		TemplatePath:      getEnv("TEMPLATE_PATH", "templates"),
 		KubernetesVersion: getEnv("KUBERNETES_VERSION", "1.33.0"),
 		VMCPUCores:        getEnv("VM_CPU_CORES", "2"),
 		VMMemory:          getEnv("VM_MEMORY", "2Gi"),
@@ -62,7 +62,7 @@ func LoadConfig() (*Config, error) {
 		PodCIDR:           getEnv("POD_CIDR", "10.0.0.0/8"),
 
 		// Scenario defaults
-		ScenariosPath: getEnv("SCENARIOS_PATH", "/etc/killerkoda/scenarios"),
+		ScenariosPath: getEnv("SCENARIOS_PATH", "scenarios"),
 	}
 
 	return config, nil
