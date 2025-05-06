@@ -4,9 +4,13 @@ package kubevirt
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -119,7 +123,6 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 	return c.createVM(ctx, namespace, workerNodeName, "worker")
 }
 
-// createCloudInitSecret creates a secret with cloud-init data for a VM
 func (c *Client) createCloudInitSecret(ctx context.Context, namespace, vmName, vmType string, extraVars ...map[string]string) error {
 	// Load cloud-init template
 	var templateName string
@@ -146,15 +149,17 @@ func (c *Client) createCloudInitSecret(ctx context.Context, namespace, vmName, v
 		}
 	}
 
-	// Execute template
-	var renderedConfig strings.Builder
-	err := c.templateCache[templateName].Execute(&renderedConfig, data)
+	// Read template file
+	templateContent, err := os.ReadFile(filepath.Join(c.config.TemplatePath, templateName))
 	if err != nil {
-		return fmt.Errorf("failed to render cloud-init template: %v", err)
+		return fmt.Errorf("failed to read template file: %w", err)
 	}
 
-	// Encode cloud-init data in base64
-	encodedConfig := base64Encode(renderedConfig.String())
+	// Substitute environment variables
+	renderedConfig := substituteEnvVars(string(templateContent), data)
+
+	// Properly encode cloud-init data in base64
+	encodedConfig := base64Encode(renderedConfig)
 
 	// Create secret
 	var secretTemplate string
@@ -171,20 +176,19 @@ func (c *Client) createCloudInitSecret(ctx context.Context, namespace, vmName, v
 		data["WORKER_USERDATA"] = encodedConfig
 	}
 
-	// Execute secret template
-	var renderedSecret strings.Builder
-	err = c.templateCache[secretTemplate].Execute(&renderedSecret, data)
+	// Read the secret template file
+	secretContent, err := os.ReadFile(filepath.Join(c.config.TemplatePath, secretTemplate))
 	if err != nil {
-		return fmt.Errorf("failed to render secret template: %v", err)
+		return fmt.Errorf("failed to read secret template file: %w", err)
 	}
 
+	// Substitute variables in the secret template
+	renderedSecret := substituteEnvVars(string(secretContent), data)
+
 	// Apply secret using kubectl
-	// In a real implementation, we would parse and apply the YAML using client-go
-	// For simplicity, this example uses kubectl apply through shell execution
-	return applyYAML(ctx, renderedSecret.String())
+	return applyYAML(ctx, renderedSecret)
 }
 
-// createVM creates a VM from a template
 func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string) error {
 	// Load VM template
 	var templateName string
@@ -209,17 +213,17 @@ func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string)
 		"POD_CIDR":              c.config.PodCIDR,
 	}
 
-	// Execute template
-	var renderedVM strings.Builder
-	err := c.templateCache[templateName].Execute(&renderedVM, data)
+	// Read the VM template file
+	templateContent, err := os.ReadFile(filepath.Join(c.config.TemplatePath, templateName))
 	if err != nil {
-		return fmt.Errorf("failed to render VM template: %v", err)
+		return fmt.Errorf("failed to read VM template file: %w", err)
 	}
 
+	// Substitute variables in the VM template
+	renderedVM := substituteEnvVars(string(templateContent), data)
+
 	// Apply VM using kubectl
-	// In a real implementation, we would parse and apply the YAML using client-go
-	// For simplicity, this example uses kubectl apply through shell execution
-	return applyYAML(ctx, renderedVM.String())
+	return applyYAML(ctx, renderedVM)
 }
 
 // WaitForVMsReady waits for multiple VMs to be ready
@@ -471,6 +475,35 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 	return stdout, nil
 }
 
+// substituteEnvVars replaces ${VAR} with the value of the environment variable VAR
+func substituteEnvVars(input string, vars map[string]string) string {
+	result := input
+
+	// Regular expression to find ${VAR} patterns
+	re := regexp.MustCompile(`\${([A-Za-z0-9_]+)}`)
+
+	// Replace all occurrences
+	result = re.ReplaceAllStringFunc(result, func(match string) string {
+		// Extract variable name without ${ and }
+		varName := match[2 : len(match)-1]
+
+		// Look up the value in vars map first, then in environment
+		if value, ok := vars[varName]; ok {
+			return value
+		}
+
+		// If not in vars map, try environment
+		if value, ok := os.LookupEnv(varName); ok {
+			return value
+		}
+
+		// If not found, return the original ${VAR}
+		return match
+	})
+
+	return result
+}
+
 // loadTemplates loads all template files from a directory
 func loadTemplates(templatePath string) (map[string]*template.Template, error) {
 	templates := make(map[string]*template.Template)
@@ -508,12 +541,37 @@ func loadTemplates(templatePath string) (map[string]*template.Template, error) {
 
 // base64Encode encodes a string to base64
 func base64Encode(input string) string {
-	// Implementation omitted for brevity
-	return input
+	return base64.StdEncoding.EncodeToString([]byte(input))
 }
 
 // applyYAML applies YAML to the cluster
 func applyYAML(ctx context.Context, yaml string) error {
-	// Implementation omitted for brevity - would use kubectl apply or client-go
+	// Create a kubectl apply command with stdin for the YAML content
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
+
+	// Create a pipe to write the YAML to stdin
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	// Create a buffer for the stderr output
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start kubectl apply: %w", err)
+	}
+
+	// Write the YAML to stdin
+	io.WriteString(stdin, yaml)
+	stdin.Close()
+
+	// Wait for the command to complete
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("kubectl apply failed: %w, stderr: %s", err, stderr.String())
+	}
+
 	return nil
 }
