@@ -3,6 +3,7 @@
 package kubevirt
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -64,6 +65,12 @@ func NewClient(restConfig *rest.Config) (*Client, error) {
 		return nil, fmt.Errorf("failed to load templates: %v", err)
 	}
 
+	// Test the KubeVirt client connection
+	_, err = virtClient.VirtualMachine("default").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to KubeVirt API: %v", err)
+	}
+
 	return &Client{
 		kubeClient:    kubeClient,
 		virtClient:    virtClient,
@@ -111,6 +118,7 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 	// Create secret with cloud-init data for worker node
 	err = c.createCloudInitSecret(ctx, namespace, workerNodeName, "worker", map[string]string{
 		"JOIN_COMMAND":           joinCommand,
+		"JOIN":                   joinCommand,
 		"CONTROL_PLANE_ENDPOINT": fmt.Sprintf("%s.%s.pod.cluster.local", strings.ReplaceAll(c.getVMIP(ctx, namespace, controlPlaneName), ".", "-"), namespace),
 		"CONTROL_PLANE_IP":       c.getVMIP(ctx, namespace, controlPlaneName),
 		"CONTROL_PLANE_VM_NAME":  controlPlaneName,
@@ -242,7 +250,8 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 		"vmName":    vmName,
 	}).Info("Waiting for VM to become ready")
 
-	return wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(context.Context) (bool, error) {
+	return wait.PollUntilContextCancel(ctx, 10*time.Second, true, func(context.Context) (bool, error) {
+		// Check VM exists and is running
 		vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
 			if errors.IsNotFound(err) {
@@ -253,12 +262,67 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 			return false, nil // Keep trying despite errors
 		}
 
-		if vm.Status.Ready {
-			logrus.WithField("vmName", vmName).Info("VM is ready")
+		// Log detailed VM status for debugging
+		logrus.WithFields(logrus.Fields{
+			"vmName":    vmName,
+			"running":   vm.Spec.Running,
+			"created":   vm.Status.Created,
+			"ready":     vm.Status.Ready,
+			"condition": vm.Status.Conditions,
+		}).Debug("VM status check")
+
+		// Also check VMI status which might have more information
+		vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
+		if err != nil {
+			if errors.IsNotFound(err) {
+				logrus.WithField("vmName", vmName).Debug("VMI not found yet, VM not fully created, retrying...")
+				return false, nil
+			}
+			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VMI status")
+			return false, nil
+		}
+
+		// Log VMI phase for debugging
+		logrus.WithFields(logrus.Fields{
+			"vmName": vmName,
+			"phase":  vmi.Status.Phase,
+			"reason": vmi.Status.Phase,
+		}).Debug("VMI status check")
+
+		// Check if VMI is in Running phase AND VM is marked as ready
+		if vmi.Status.Phase == "Running" && vm.Status.Ready {
+			logrus.WithField("vmName", vmName).Info("VM is ready and running")
 			return true, nil
 		}
 
-		logrus.WithField("vmName", vmName).Debug("VM not ready yet, retrying...")
+		// Check if VMI is in Running phase even if VM.Ready isn't true yet
+		// This might indicate the VM is actually ready but the status hasn't updated
+		if vmi.Status.Phase == "Running" {
+			// If VMI has been running for a while, consider the VM ready despite VM.Ready flag
+			if vmi.Status.PhaseTransitionTimestamps != nil && len(vmi.Status.PhaseTransitionTimestamps) > 0 {
+				for _, transition := range vmi.Status.PhaseTransitionTimestamps {
+					if transition.Phase == "Running" {
+						runningDuration := time.Since(transition.PhaseTransitionTimestamp.Time)
+						// If VMI has been in Running phase for over 60 seconds, consider it ready
+						if runningDuration > 60*time.Second {
+							logrus.WithField("vmName", vmName).Info("VM has been running for 60+ seconds, considering it ready")
+							return true, nil
+						}
+						logrus.WithFields(logrus.Fields{
+							"vmName":     vmName,
+							"runningFor": runningDuration.Seconds(),
+						}).Debug("VM is running but not yet considered ready")
+						break
+					}
+				}
+			}
+		}
+
+		logrus.WithFields(logrus.Fields{
+			"vmName":   vmName,
+			"vmiPhase": vmi.Status.Phase,
+			"vmReady":  vm.Status.Ready,
+		}).Debug("VM not ready yet, retrying...")
 		return false, nil
 	})
 }
@@ -277,39 +341,63 @@ func (c *Client) VerifyKubeVirtAvailable(ctx context.Context) error {
 	return nil
 }
 
-// getJoinCommand gets the kubeadm join command from the control plane
 func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName string) (string, error) {
+	logrus.WithFields(logrus.Fields{
+		"namespace":        namespace,
+		"controlPlaneName": controlPlaneName,
+	}).Info("Getting join command from control plane")
+
+	// Adjust the VM name to match the actual name pattern
+	actualVMName := fmt.Sprintf("cks-control-plane-%s", namespace)
+	logrus.WithField("actualVMName", actualVMName).Info("Adjusted VM name for join command")
+
+	// Wait for the VM to be fully ready with kubelet initialized
+	// This might take longer than just the VM being "ready"
+	time.Sleep(30 * time.Second)
+
 	// Wait for kubeadm init to complete and join command to be available
 	var joinCommand string
-	err := wait.PollImmediate(10*time.Second, 5*time.Minute, func() (bool, error) {
-		// Execute command to get join command
-		pod, err := c.GetVMPodName(ctx, namespace, controlPlaneName)
+	err := wait.PollImmediate(15*time.Second, 15*time.Minute, func() (bool, error) {
+		// Execute command using virtctl
+		cmd := exec.Command(
+			"virtctl", "ssh",
+			fmt.Sprintf("vmi/%s", actualVMName),
+			"-n", namespace,
+			"-l", "suporte",
+			"--local-ssh-opts=-o StrictHostKeyChecking=no",
+			"--command=cat /etc/kubeadm-join-command",
+		)
+
+		logrus.WithField("command", cmd.String()).Debug("Executing virtctl command")
+
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		err := cmd.Run()
 		if err != nil {
+			logrus.WithError(err).WithField("stderr", stderr.String()).Debug("Failed to execute virtctl, retrying...")
 			return false, nil // Keep trying
 		}
 
-		// Use kubectl exec to read the join command file
-		cmd := []string{
-			"cat", "/etc/kubeadm-join-command",
-		}
-
-		stdout, stderr, err := c.executeCommand(ctx, namespace, pod, "compute", cmd)
-		if err != nil {
-			// Command might not exist yet, keep polling
-			return false, nil
-		}
-
-		if stderr != "" {
-			// Command failed, keep polling
+		if stderr.Len() > 0 {
+			logrus.WithField("stderr", stderr.String()).Debug("Command returned error, retrying...")
 			return false, nil
 		}
 
 		// Got join command
-		joinCommand = strings.TrimSpace(stdout)
+		output := stdout.String()
+		joinCommand = strings.TrimSpace(output)
 		if joinCommand != "" {
+			// Replace IP addresses with hostname
+			re := regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
+			joinCommand = re.ReplaceAllString(joinCommand, actualVMName)
+
+			logrus.WithField("joinCommand", joinCommand).Info("Successfully retrieved join command")
 			return true, nil
 		}
 
+		logrus.Debug("Join command not available yet, retrying...")
 		return false, nil
 	})
 
@@ -352,8 +440,12 @@ func (c *Client) getVMIP(ctx context.Context, namespace, vmName string) string {
 	return ip
 }
 
-// GetVMPodName gets the name of the pod associated with a VM
 func (c *Client) GetVMPodName(ctx context.Context, namespace, vmName string) (string, error) {
+	logrus.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmName":    vmName,
+	}).Debug("Getting pod name for VM")
+
 	vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
 	if err != nil {
 		return "", err
@@ -362,6 +454,8 @@ func (c *Client) GetVMPodName(ctx context.Context, namespace, vmName string) (st
 	// The pod name is typically stored in the status
 	if vmi.Status.NodeName != "" {
 		// List pods in the namespace
+		logrus.WithField("labelSelector", fmt.Sprintf("kubevirt.io/domain=%s", vmName)).Debug("Listing pods with label selector")
+
 		pods, err := c.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("kubevirt.io/domain=%s", vmName),
 		})
@@ -370,7 +464,23 @@ func (c *Client) GetVMPodName(ctx context.Context, namespace, vmName string) (st
 		}
 
 		if len(pods.Items) > 0 {
+			logrus.WithField("podName", pods.Items[0].Name).Debug("Found pod for VM")
 			return pods.Items[0].Name, nil
+		}
+	}
+
+	// If not found with the exact name, try listing all pods
+	logrus.Debug("Pod not found with direct label, listing all pods in namespace")
+	allPods, err := c.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	// Look for a pod that might be related to our VM
+	for _, pod := range allPods.Items {
+		if strings.Contains(pod.Name, "virt-launcher") && strings.Contains(pod.Name, strings.Replace(vmName, "cks-", "", 1)) {
+			logrus.WithField("podName", pod.Name).Info("Found pod with partial match for VM")
+			return pod.Name, nil
 		}
 	}
 

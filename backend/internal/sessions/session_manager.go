@@ -95,8 +95,8 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 		Status:           models.SessionStatusPending,
 		StartTime:        time.Now(),
 		ExpirationTime:   time.Now().Add(time.Duration(sm.config.SessionTimeoutMinutes) * time.Minute),
-		ControlPlaneVM:   fmt.Sprintf("cks-control-plane-%s", sessionID),
-		WorkerNodeVM:     fmt.Sprintf("cks-worker-node-%s", sessionID),
+		ControlPlaneVM:   fmt.Sprintf("cks-control-plane-user-session-%s", sessionID),
+		WorkerNodeVM:     fmt.Sprintf("cks-worker-node-user-session-%s", sessionID),
 		Tasks:            tasks,
 		TerminalSessions: make(map[string]string),
 	}
@@ -113,7 +113,7 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 	// Create namespace asynchronously with a new background context
 	go func() {
 		// Create a new background context with a longer timeout
-		provisionCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		provisionCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 
 		err := sm.provisionEnvironment(provisionCtx, session)

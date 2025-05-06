@@ -79,6 +79,7 @@ runcmd:
   # Wait for control plane to become available
   - until nc -z ${CONTROL_PLANE_ENDPOINT} 6443; do echo "Waiting for control plane ${CONTROL_PLANE_ENDPOINT}..."; sleep 10; done
   - echo "${CONTROL_PLANE_IP} ${CONTROL_PLANE_VM_NAME}" >> /etc/hosts
+  - cat /etc/hosts
   # Join the Kubernetes cluster
   - eval $JOIN_COMMAND --ignore-preflight-errors=NumCPU,Mem
   - echo "${JOIN}"
