@@ -110,7 +110,7 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
     };
   }, [terminalId, sessionId]);
 
-  // Connect to WebSocket
+  // Connect to WebSocket with improved error handling
   const connectWebSocket = () => {
     if (!terminal.current) return;
 
@@ -120,14 +120,24 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
     }
 
     // Show connecting message
-    terminal.current.writeln('Connecting to terminal...');
+    terminal.current.writeln('\r\nConnecting to terminal...');
 
     try {
       console.log(`Creating WebSocket connection to terminal: ${terminalId}`);
       socket.current = createTerminalConnection(terminalId);
 
+      // Add timeout for connection
+      const connectionTimeout = setTimeout(() => {
+        if (socket.current && socket.current.readyState !== WebSocket.OPEN) {
+          console.log("Connection timeout - closing socket");
+          socket.current.close();
+          terminal.current.writeln('\r\nConnection timeout. Try refreshing the page.');
+        }
+      }, 30000); // 30 second timeout
+
       // WebSocket open handler
       socket.current.onopen = () => {
+        clearTimeout(connectionTimeout);
         console.log(`WebSocket connected for terminal ${terminalId}`);
         setConnected(true);
         terminal.current.writeln('\r\nConnection established!');
@@ -138,16 +148,30 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
 
       // WebSocket close handler
       socket.current.onclose = (event) => {
+        clearTimeout(connectionTimeout);
         console.log(`WebSocket closed for terminal ${terminalId}`, event);
         setConnected(false);
-        terminal.current.writeln('\r\nConnection closed.');
+
+        if (event.code === 1006) {
+          // Abnormal closure
+          terminal.current.writeln('\r\nConnection lost unexpectedly. Trying to reconnect...');
+
+          // Try to reconnect after a delay
+          setTimeout(() => {
+            if (terminalRef.current) { // Only reconnect if component is still mounted
+              connectWebSocket();
+            }
+          }, 5000);
+        } else {
+          terminal.current.writeln(`\r\nConnection closed (${event.code}).`);
+        }
       };
 
       // WebSocket error handler
       socket.current.onerror = (error) => {
         console.error(`WebSocket error for terminal ${terminalId}:`, error);
         setConnected(false);
-        terminal.current.writeln('\r\nConnection error. Check console for details.');
+        terminal.current.writeln('\r\nConnection error. Server may still be initializing. Try again in a moment.');
       };
 
       // WebSocket message handler

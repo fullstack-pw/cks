@@ -11,17 +11,20 @@ import (
 	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/fullstack-pw/cks/backend/internal/sessions"
 	"github.com/gin-gonic/gin"
+	"github.com/sirupsen/logrus"
 )
 
 // SessionController handles HTTP requests related to sessions
 type SessionController struct {
 	sessionManager *sessions.SessionManager
+	logger         *logrus.Logger
 }
 
 // NewSessionController creates a new session controller
-func NewSessionController(sessionManager *sessions.SessionManager) *SessionController {
+func NewSessionController(sessionManager *sessions.SessionManager, logger *logrus.Logger) *SessionController {
 	return &SessionController{
 		sessionManager: sessionManager,
+		logger:         logger,
 	}
 }
 
@@ -83,10 +86,25 @@ func (sc *SessionController) ListSessions(c *gin.Context) {
 // GetSession returns details for a specific session
 func (sc *SessionController) GetSession(c *gin.Context) {
 	sessionID := c.Param("id")
+
 	session, err := sc.sessionManager.GetSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
 		return
+	}
+
+	// Add additional status check for VM readiness
+	if session.Status == models.SessionStatusProvisioning {
+		// Check VMs status
+		vmStatus, err := sc.sessionManager.CheckVMsStatus(c.Request.Context(), session)
+		if err != nil {
+			// Just log the error, don't fail the request
+			sc.logger.WithError(err).WithField("sessionID", sessionID).Warn("Failed to check VM status")
+		} else if vmStatus == "Running" {
+			// Update session status to running if VMs are ready
+			sc.sessionManager.UpdateSessionStatus(sessionID, models.SessionStatusRunning, "")
+			session.Status = models.SessionStatusRunning
+		}
 	}
 
 	c.JSON(http.StatusOK, session)

@@ -63,6 +63,18 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
+	// Check if session is in running state
+	if session.Status != "running" {
+		tc.logger.WithFields(logrus.Fields{
+			"sessionID": sessionID,
+			"status":    session.Status,
+		}).Warn("Attempted to create terminal for non-running session")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": fmt.Sprintf("Session is not ready yet, current status: %s", session.Status),
+		})
+		return
+	}
+
 	// Validate target
 	targetVM := ""
 	switch request.Target {
@@ -76,7 +88,7 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// Create terminal session
+	// Create terminal session (removed context parameter)
 	terminalID, err := tc.terminalManager.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to create terminal session")

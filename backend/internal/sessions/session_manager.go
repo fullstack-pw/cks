@@ -573,3 +573,53 @@ func (sm *SessionManager) Stop() {
 	close(sm.stopCh)
 	sm.logger.Info("Session manager stopped")
 }
+
+// CheckVMsStatus checks the status of VMs in a session
+func (sm *SessionManager) CheckVMsStatus(ctx context.Context, session *models.Session) (string, error) {
+	controlPlaneStatus, err := sm.kubevirtClient.GetVMStatus(ctx, session.Namespace, session.ControlPlaneVM)
+	if err != nil {
+		return "", fmt.Errorf("failed to get control plane VM status: %w", err)
+	}
+
+	workerNodeStatus, err := sm.kubevirtClient.GetVMStatus(ctx, session.Namespace, session.WorkerNodeVM)
+	if err != nil {
+		return "", fmt.Errorf("failed to get worker node VM status: %w", err)
+	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":          session.ID,
+		"controlPlaneStatus": controlPlaneStatus,
+		"workerNodeStatus":   workerNodeStatus,
+	}).Debug("VM status check")
+
+	// Only return "Running" if both VMs are running
+	if controlPlaneStatus == "Running" && workerNodeStatus == "Running" {
+		return "Running", nil
+	}
+
+	// Return the status of the control plane since it's more critical
+	return controlPlaneStatus, nil
+}
+
+// UpdateSessionStatus updates the status of a session
+func (sm *SessionManager) UpdateSessionStatus(sessionID string, status models.SessionStatus, message string) error {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	session, ok := sm.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Update status
+	session.Status = status
+	session.StatusMessage = message
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"status":    status,
+		"message":   message,
+	}).Info("Session status updated")
+
+	return nil
+}

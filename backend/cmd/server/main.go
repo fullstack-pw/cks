@@ -121,7 +121,7 @@ func main() {
 	}
 
 	// In main.go, update the controller registration section
-	sessionController := controllers.NewSessionController(sessionManager)
+	sessionController := controllers.NewSessionController(sessionManager, logger)
 	sessionController.RegisterRoutes(router)
 
 	scenarioController := controllers.NewScenarioController(scenarioManager)
