@@ -87,18 +87,15 @@ export const api = {
     }
 };
 
-// frontend/lib/api.js - Fix terminal WebSocket connection
-
+// frontend/lib/api.js - Fix the createTerminalConnection function
 export const createTerminalConnection = (terminalId) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-
-    // Extract the host and determine correct WebSocket endpoint
-    // Development environment usually proxies WebSocket connections through the same host
     const host = window.location.host;
 
-    // The correct path for terminal WebSocket connections
+    // Create the correct WebSocket URL
     const wsPath = `/api/v1/terminals/${terminalId}/attach`;
 
+    console.log(`Creating WebSocket connection to: ${protocol}//${host}${wsPath}`);
     return new WebSocket(`${protocol}//${host}${wsPath}`);
 };
 

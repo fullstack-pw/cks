@@ -1,4 +1,4 @@
-// frontend/components/TerminalCore.js - Fixed terminal initialization
+// frontend/components/TerminalCore.js - Fix terminal data handling
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
@@ -8,115 +8,86 @@ import { SearchAddon } from 'xterm-addon-search';
 import { createTerminalConnection } from '../lib/api';
 import 'xterm/css/xterm.css';
 
-const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
+const TerminalCore = ({ sessionId, terminalId, target }) => {
   const terminalRef = useRef(null);
   const terminal = useRef(null);
   const fitAddon = useRef(null);
   const socket = useRef(null);
-  const searchAddon = useRef(null);
   const [connected, setConnected] = useState(false);
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
   // Set up terminal and WebSocket connection
   useEffect(() => {
-    // Make sure DOM is ready
     if (!terminalRef.current) return;
 
-    // Skip if already initialized
-    if (terminal.current) return;
+    // Initialize terminal
+    const initTerminal = () => {
+      // Skip if already initialized
+      if (terminal.current) return;
 
-    // Initialize terminal with a slight delay to ensure DOM is ready
-    const initializeTerminal = () => {
-      try {
-        // Create terminal
-        terminal.current = new Terminal({
-          fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-          fontSize: 14,
-          rows: 24,
-          theme: {
-            background: '#1e1e1e',
-            foreground: '#d4d4d4',
-            black: '#000000',
-            red: '#cd3131',
-            green: '#0dbc79',
-            yellow: '#e5e510',
-            blue: '#2472c8',
-            magenta: '#bc3fbc',
-            cyan: '#11a8cd',
-            white: '#e5e5e5',
-            brightBlack: '#666666',
-            brightRed: '#f14c4c',
-            brightGreen: '#23d18b',
-            brightYellow: '#f5f543',
-            brightBlue: '#3b8eea',
-            brightMagenta: '#d670d6',
-            brightCyan: '#29b8db',
-            brightWhite: '#e5e5e5',
-          },
-          scrollback: 1000,
-          cursorBlink: true,
-        });
+      console.log('Initializing terminal...');
 
-        // Create and register addons
-        fitAddon.current = new FitAddon();
-        searchAddon.current = new SearchAddon();
-        const webLinksAddon = new WebLinksAddon();
-
-        terminal.current.loadAddon(fitAddon.current);
-        terminal.current.loadAddon(searchAddon.current);
-        terminal.current.loadAddon(webLinksAddon);
-
-        // Open terminal - wrap in try/catch to catch any initialization errors
-        try {
-          if (terminalRef.current) {
-            terminal.current.open(terminalRef.current);
-            console.log("Terminal opened successfully");
-
-            // Fit terminal to container
-            setTimeout(() => {
-              if (fitAddon.current) {
-                try {
-                  fitAddon.current.fit();
-                  console.log("Terminal fit successful");
-                } catch (fitError) {
-                  console.error("Error fitting terminal:", fitError);
-                }
-              }
-            }, 100);
-
-            // Connect WebSocket after terminal is initialized
-            connectWebSocket();
-          } else {
-            console.error("Terminal DOM element not available");
-          }
-        } catch (openError) {
-          console.error("Error opening terminal:", openError);
+      // Create terminal instance
+      terminal.current = new Terminal({
+        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        fontSize: 14,
+        rows: 24,
+        cursorBlink: true,
+        theme: {
+          background: '#1e1e1e',
+          foreground: '#d4d4d4'
         }
-      } catch (initError) {
-        console.error("Terminal initialization error:", initError);
-      }
+      });
+
+      // Create addons
+      fitAddon.current = new FitAddon();
+      const searchAddon = new SearchAddon();
+      const webLinksAddon = new WebLinksAddon();
+
+      // Load addons
+      terminal.current.loadAddon(fitAddon.current);
+      terminal.current.loadAddon(searchAddon);
+      terminal.current.loadAddon(webLinksAddon);
+
+      // Open terminal
+      terminal.current.open(terminalRef.current);
+      console.log('Terminal opened successfully');
+
+      // Fit terminal to container
+      setTimeout(() => {
+        if (fitAddon.current) {
+          try {
+            fitAddon.current.fit();
+            console.log('Terminal fit successful');
+          } catch (error) {
+            console.error('Terminal fit error:', error);
+          }
+        }
+      }, 100);
+
+      // Connect terminal to WebSocket
+      connectWebSocket();
     };
 
-    // Delay terminal initialization slightly to ensure DOM is ready
-    setTimeout(initializeTerminal, 100);
+    initTerminal();
 
-    // Set up resize handler
+    // Handle resize
     const handleResize = () => {
       if (fitAddon.current && terminal.current) {
         try {
           fitAddon.current.fit();
-          // Send terminal size to WebSocket
+          // Send terminal size
           sendTerminalSize();
         } catch (error) {
-          console.error("Resize error:", error);
+          console.error('Resize error:', error);
         }
       }
     };
 
     window.addEventListener('resize', handleResize);
 
-    // Cleanup function
+    // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize);
 
@@ -129,90 +100,97 @@ const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
         terminal.current = null;
       }
     };
-  }, [sessionId, terminalId, terminalRef.current]); // Add terminalRef.current as dependency
+  }, [terminalId, sessionId]);
 
-  // Connect WebSocket
+  // Connect to WebSocket
   const connectWebSocket = () => {
-    // Close existing connection if any
+    if (!terminal.current) return;
+
+    // Close existing connection
     if (socket.current) {
       socket.current.close();
     }
 
-    // Display connecting message
-    if (terminal.current) {
-      terminal.current.writeln('Connecting to terminal...');
-    }
+    // Show connecting message
+    terminal.current.writeln('Connecting to terminal...');
 
-    // Create WebSocket connection
     try {
+      console.log(`Creating WebSocket connection to terminal: ${terminalId}`);
       socket.current = createTerminalConnection(terminalId);
 
-      // WebSocket event handlers
+      // WebSocket open handler
       socket.current.onopen = () => {
+        console.log(`WebSocket connected for terminal ${terminalId}`);
         setConnected(true);
-        if (terminal.current) {
-          terminal.current.writeln('Connected!');
-        }
+        terminal.current.writeln('\r\nConnection established!');
 
-        // Send terminal size
-        sendTerminalSize();
+        // Send initial terminal size
+        setTimeout(sendTerminalSize, 100);
       };
 
-      socket.current.onclose = () => {
+      // WebSocket close handler
+      socket.current.onclose = (event) => {
+        console.log(`WebSocket closed for terminal ${terminalId}`, event);
         setConnected(false);
-        if (terminal.current) {
-          terminal.current.writeln('\r\nConnection closed.');
-        }
-
-        if (onDisconnect) {
-          onDisconnect();
-        }
+        terminal.current.writeln('\r\nConnection closed.');
       };
 
+      // WebSocket error handler
       socket.current.onerror = (error) => {
+        console.error(`WebSocket error for terminal ${terminalId}:`, error);
         setConnected(false);
-        console.error("WebSocket error:", error);
-        if (terminal.current) {
-          terminal.current.writeln(`\r\nConnection error: ${error.message || 'Unknown error'}`);
-        }
-
-        if (onDisconnect) {
-          onDisconnect();
-        }
+        terminal.current.writeln('\r\nConnection error. Check console for details.');
       };
 
+      // WebSocket message handler
       socket.current.onmessage = (event) => {
         if (!terminal.current) return;
 
-        if (event.data instanceof ArrayBuffer) {
-          // Binary data
-          const uint8Array = new Uint8Array(event.data);
-          terminal.current.write(uint8Array);
-        } else {
-          // Text data
-          terminal.current.write(event.data);
+        try {
+          // Check if data is binary (ArrayBuffer) or text
+          if (event.data instanceof ArrayBuffer) {
+            // Process binary data
+            console.log(`Received binary data of length ${event.data.byteLength}`);
+            const uint8Array = new Uint8Array(event.data);
+            terminal.current.write(uint8Array);
+          } else if (typeof event.data === 'string') {
+            // Process text data
+            console.log(`Received text data of length ${event.data.length}`);
+            terminal.current.write(event.data);
+          } else if (event.data instanceof Blob) {
+            // Process blob data
+            console.log(`Received blob data of size ${event.data.size}`);
+            const reader = new FileReader();
+            reader.onload = () => {
+              const arrayBuffer = reader.result;
+              const uint8Array = new Uint8Array(arrayBuffer);
+              terminal.current.write(uint8Array);
+            };
+            reader.readAsArrayBuffer(event.data);
+          }
+        } catch (error) {
+          console.error('Error processing terminal data:', error);
         }
       };
 
-      // Listen for data from terminal
-      if (terminal.current) {
-        terminal.current.onData((data) => {
-          if (socket.current && socket.current.readyState === WebSocket.OPEN) {
-            socket.current.send(data);
-          }
-        });
-      }
+      // Set up terminal input handler
+      terminal.current.onData((data) => {
+        if (socket.current && socket.current.readyState === WebSocket.OPEN) {
+          socket.current.send(data);
+        }
+      });
+
+      // Log connection status
+      console.log(`WebSocket connection to: ${socket.current.url}`);
     } catch (error) {
-      console.error("Error connecting WebSocket:", error);
-      if (terminal.current) {
-        terminal.current.writeln(`\r\nFailed to create WebSocket: ${error.message || 'Unknown error'}`);
-      }
+      console.error('Error connecting to WebSocket:', error);
+      terminal.current.writeln(`\r\nFailed to connect: ${error.message}`);
     }
   };
 
-  // Send terminal size to WebSocket
+  // Send terminal size to server
   const sendTerminalSize = () => {
-    if (!fitAddon.current || !socket.current || socket.current.readyState !== WebSocket.OPEN || !terminal.current) {
+    if (!fitAddon.current || !socket.current || socket.current.readyState !== WebSocket.OPEN) {
       return;
     }
 
@@ -222,25 +200,30 @@ const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
         return;
       }
 
-      // Binary message format: [type, cols_high, cols_low, rows_high, rows_low]
-      const message = new Uint8Array(5);
-      message[0] = 1; // Resize message type
-      message[1] = dims.cols >> 8;
-      message[2] = dims.cols & 0xff;
-      message[3] = dims.rows >> 8;
-      message[4] = dims.rows & 0xff;
+      // Create binary message for resize
+      const sizeMessage = new Uint8Array(5);
+      sizeMessage[0] = 1; // Resize message type
+      sizeMessage[1] = dims.cols >> 8;
+      sizeMessage[2] = dims.cols & 0xff;
+      sizeMessage[3] = dims.rows >> 8;
+      sizeMessage[4] = dims.rows & 0xff;
 
-      socket.current.send(message);
+      socket.current.send(sizeMessage);
+      console.log(`Sent terminal resize: ${dims.cols}x${dims.rows}`);
     } catch (error) {
-      console.error("Error sending terminal size:", error);
+      console.error('Error sending terminal size:', error);
     }
   };
 
-  // Handle search
+  // Handle search in terminal
   const handleSearch = () => {
-    if (!searchAddon.current || !searchTerm || !terminal.current) return;
+    if (!terminal.current || !searchTerm) return;
 
-    searchAddon.current.findNext(searchTerm);
+    try {
+      terminal.current.findNext(searchTerm);
+    } catch (error) {
+      console.error('Search error:', error);
+    }
   };
 
   return (
@@ -253,7 +236,7 @@ const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search..."
-            className="flex-1 px-3 py-1 text-sm text-white bg-gray-700 border border-gray-600 rounded-l focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="flex-1 px-3 py-1 text-sm text-white bg-gray-700 border border-gray-600 rounded-l"
             onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
           />
           <button
@@ -271,12 +254,11 @@ const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
         </div>
       )}
 
-      {/* Terminal */}
+      {/* Terminal container */}
       <div className="flex-1 relative">
         <div
-          className="absolute inset-0"
           ref={terminalRef}
-          style={{ width: '100%', height: '100%' }}
+          className="absolute inset-0"
         />
       </div>
 
@@ -293,11 +275,7 @@ const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
             </svg>
           </button>
           <button
-            onClick={() => {
-              if (terminal.current) {
-                terminal.current.clear();
-              }
-            }}
+            onClick={() => terminal.current && terminal.current.clear()}
             className="ml-2 px-2 py-1 text-xs bg-gray-700 text-white rounded hover:bg-gray-600"
             title="Clear"
           >
@@ -309,10 +287,7 @@ const TerminalCore = ({ sessionId, terminalId, target, onDisconnect }) => {
         <div>
           <button
             onClick={connectWebSocket}
-            className={`px-2 py-1 text-xs ${connected
-              ? 'bg-green-600 hover:bg-green-700'
-              : 'bg-red-600 hover:bg-red-700'
-              } text-white rounded`}
+            className={`px-2 py-1 text-xs ${connected ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'} text-white rounded`}
             title={connected ? 'Connected' : 'Reconnect'}
           >
             {connected ? 'Connected' : 'Reconnect'}

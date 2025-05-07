@@ -111,6 +111,12 @@ func (tc *TerminalController) AttachTerminal(c *gin.Context) {
 
 	tc.logger.WithField("terminalID", terminalID).Info("Attaching to terminal session")
 
+	// Add CORS headers for WebSocket connections
+	c.Header("Access-Control-Allow-Origin", "*")
+	c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
+	c.Header("Access-Control-Allow-Credentials", "true")
+
 	// Handle WebSocket
 	tc.terminalManager.HandleTerminal(c.Writer, c.Request, terminalID)
 }

@@ -1,5 +1,4 @@
-// frontend/components/TerminalContainer.js - Fixed component
-
+// frontend/components/TerminalContainer.js - Fix terminal ID handling
 import React, { useState, useEffect } from 'react';
 import Terminal from './Terminal';
 import api from '../lib/api';
@@ -10,39 +9,46 @@ const TerminalContainer = ({ sessionId }) => {
         'control-plane': { connected: false, id: null },
         'worker-node': { connected: false, id: null }
     });
+    const [isCreatingTerminal, setIsCreatingTerminal] = useState(false);
 
     // Create terminal sessions on initial load
     useEffect(() => {
-        const createTerminalSessions = async () => {
+        const createTerminalSession = async (target) => {
+            if (terminals[target].id || isCreatingTerminal) return;
+
             try {
-                // Create control plane terminal
-                if (!terminals['control-plane'].id) {
-                    const result = await api.terminals.create(sessionId, 'control-plane');
-                    setTerminals(prev => ({
-                        ...prev,
-                        'control-plane': {
-                            id: result.terminalId,
-                            connected: true
-                        }
-                    }));
-                }
+                setIsCreatingTerminal(true);
+                console.log(`Creating terminal for ${target}...`);
+                const result = await api.terminals.create(sessionId, target);
+                console.log(`Terminal created for ${target}:`, result);
+
+                setTerminals(prev => ({
+                    ...prev,
+                    [target]: {
+                        id: result.terminalId,
+                        connected: true
+                    }
+                }));
             } catch (error) {
-                console.error('Failed to create terminal session:', error);
+                console.error(`Failed to create ${target} terminal:`, error);
+            } finally {
+                setIsCreatingTerminal(false);
             }
         };
 
         if (sessionId) {
-            createTerminalSessions();
+            createTerminalSession('control-plane');
         }
-    }, [sessionId]);
+    }, [sessionId, terminals, isCreatingTerminal]);
 
     // Create terminal for second tab when clicked
     const handleTabChange = async (target) => {
         setActiveTab(target);
 
         // Create terminal for this tab if it doesn't exist
-        if (!terminals[target].id) {
+        if (!terminals[target].id && !isCreatingTerminal) {
             try {
+                setIsCreatingTerminal(true);
                 const result = await api.terminals.create(sessionId, target);
                 setTerminals(prev => ({
                     ...prev,
@@ -53,6 +59,8 @@ const TerminalContainer = ({ sessionId }) => {
                 }));
             } catch (error) {
                 console.error(`Failed to create ${target} terminal:`, error);
+            } finally {
+                setIsCreatingTerminal(false);
             }
         }
     };
@@ -74,16 +82,17 @@ const TerminalContainer = ({ sessionId }) => {
                 </button>
             </div>
             <div className="flex-1 overflow-hidden">
-                {terminals[activeTab].id && (
+                {terminals[activeTab].id ? (
                     <Terminal
                         sessionId={sessionId}
                         terminalId={terminals[activeTab].id}
                         target={activeTab}
                     />
-                )}
-                {!terminals[activeTab].id && (
+                ) : (
                     <div className="flex justify-center items-center h-full bg-gray-800 text-white">
-                        <span>Connecting to terminal...</span>
+                        <span>
+                            {isCreatingTerminal ? 'Creating terminal...' : 'Click to connect to terminal'}
+                        </span>
                     </div>
                 )}
             </div>
