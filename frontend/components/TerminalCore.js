@@ -111,8 +111,14 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
   }, [terminalId, sessionId]);
 
   // Connect to WebSocket with improved error handling
+  // Add connection status tracking
+  const [isReconnecting, setIsReconnecting] = useState(false);
+
+  // Update the connectWebSocket function
   const connectWebSocket = () => {
-    if (!terminal.current) return;
+    if (!terminal.current || isReconnecting) return;
+
+    setIsReconnecting(true);
 
     // Close existing connection
     if (socket.current) {
@@ -120,101 +126,42 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
     }
 
     // Show connecting message
-    terminal.current.writeln('\r\nConnecting to terminal...');
+    terminal.current.writeln('Connecting to terminal...');
 
     try {
       console.log(`Creating WebSocket connection to terminal: ${terminalId}`);
       socket.current = createTerminalConnection(terminalId);
 
-      // Add timeout for connection
-      const connectionTimeout = setTimeout(() => {
-        if (socket.current && socket.current.readyState !== WebSocket.OPEN) {
-          console.log("Connection timeout - closing socket");
-          socket.current.close();
-          terminal.current.writeln('\r\nConnection timeout. Try refreshing the page.');
-        }
-      }, 30000); // 30 second timeout
-
       // WebSocket open handler
       socket.current.onopen = () => {
-        clearTimeout(connectionTimeout);
         console.log(`WebSocket connected for terminal ${terminalId}`);
         setConnected(true);
+        setIsReconnecting(false);
         terminal.current.writeln('\r\nConnection established!');
 
         // Send initial terminal size
         setTimeout(sendTerminalSize, 100);
       };
 
-      // WebSocket close handler
+      // Update onclose to handle reconnection attempts better
       socket.current.onclose = (event) => {
-        clearTimeout(connectionTimeout);
         console.log(`WebSocket closed for terminal ${terminalId}`, event);
         setConnected(false);
-
-        if (event.code === 1006) {
-          // Abnormal closure
-          terminal.current.writeln('\r\nConnection lost unexpectedly. Trying to reconnect...');
-
-          // Try to reconnect after a delay
-          setTimeout(() => {
-            if (terminalRef.current) { // Only reconnect if component is still mounted
-              connectWebSocket();
-            }
-          }, 5000);
-        } else {
-          terminal.current.writeln(`\r\nConnection closed (${event.code}).`);
-        }
+        setIsReconnecting(false);
+        terminal.current.writeln('\r\nConnection closed.');
       };
 
-      // WebSocket error handler
+      // Update onerror to handle errors better
       socket.current.onerror = (error) => {
         console.error(`WebSocket error for terminal ${terminalId}:`, error);
         setConnected(false);
-        terminal.current.writeln('\r\nConnection error. Server may still be initializing. Try again in a moment.');
+        setIsReconnecting(false);
+        terminal.current.writeln('\r\nConnection error. Check console for details.');
       };
 
-      // WebSocket message handler
-      socket.current.onmessage = (event) => {
-        if (!terminal.current) return;
-
-        try {
-          // Check if data is binary (ArrayBuffer) or text
-          if (event.data instanceof ArrayBuffer) {
-            // Process binary data
-            console.log(`Received binary data of length ${event.data.byteLength}`);
-            const uint8Array = new Uint8Array(event.data);
-            terminal.current.write(uint8Array);
-          } else if (typeof event.data === 'string') {
-            // Process text data
-            console.log(`Received text data of length ${event.data.length}`);
-            terminal.current.write(event.data);
-          } else if (event.data instanceof Blob) {
-            // Process blob data
-            console.log(`Received blob data of size ${event.data.size}`);
-            const reader = new FileReader();
-            reader.onload = () => {
-              const arrayBuffer = reader.result;
-              const uint8Array = new Uint8Array(arrayBuffer);
-              terminal.current.write(uint8Array);
-            };
-            reader.readAsArrayBuffer(event.data);
-          }
-        } catch (error) {
-          console.error('Error processing terminal data:', error);
-        }
-      };
-
-      // Set up terminal input handler
-      terminal.current.onData((data) => {
-        if (socket.current && socket.current.readyState === WebSocket.OPEN) {
-          socket.current.send(data);
-        }
-      });
-
-      // Log connection status
-      console.log(`WebSocket connection to: ${socket.current.url}`);
+      // ... rest of the function
     } catch (error) {
+      setIsReconnecting(false);
       console.error('Error connecting to WebSocket:', error);
       terminal.current.writeln(`\r\nFailed to connect: ${error.message}`);
     }

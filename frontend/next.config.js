@@ -7,13 +7,13 @@ const nextConfig = {
             {
                 source: '/api/:path*',
                 destination: 'http://localhost:8080/api/:path*',
-                has: [
-                    {
-                        type: 'header',
-                        key: 'upgrade',
-                        value: 'websocket',
-                    },
-                ],
+                // has: [
+                //     {
+                //         type: 'header',
+                //         key: 'upgrade',
+                //         value: 'websocket',
+                //     },
+                // ],
             }
         ]
     },

@@ -33,15 +33,17 @@ type Manager struct {
 
 // Session represents a terminal session
 type Session struct {
-	ID        string
-	SessionID string
-	Target    string
-	Namespace string
-	PodName   string
-	Container string
-	Created   time.Time
-	LastUsed  time.Time
-	SizeChan  chan remotecommand.TerminalSize
+	ID               string
+	SessionID        string
+	Target           string
+	Namespace        string
+	PodName          string
+	Container        string
+	Created          time.Time
+	LastUsed         time.Time
+	SizeChan         chan remotecommand.TerminalSize
+	ActiveConnection bool
+	ConnectionMutex  sync.Mutex
 }
 
 // NewManager creates a new terminal manager
@@ -138,6 +140,24 @@ func (tm *Manager) CloseSession(terminalID string) error {
 
 // HandleTerminal handles a WebSocket connection for a terminal session
 func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, terminalID string) {
+	// Get session
+	session, err := tm.GetSession(terminalID)
+	if err != nil {
+		tm.logger.WithError(err).WithField("terminalID", terminalID).Error("Terminal session not found")
+		http.Error(w, "Terminal session not found", http.StatusNotFound)
+		return
+	}
+
+	// Check if there's already an active connection
+	session.ConnectionMutex.Lock()
+	if session.ActiveConnection {
+		session.ConnectionMutex.Unlock()
+		tm.logger.WithField("terminalID", terminalID).Warn("Connection already exists, rejecting new connection")
+		http.Error(w, "Another connection to this terminal is already active", http.StatusConflict)
+		return
+	}
+	session.ActiveConnection = true
+	session.ConnectionMutex.Unlock()
 	// Set up websocket
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -155,14 +175,6 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 		return
 	}
 	defer ws.Close()
-
-	// Get session
-	session, err := tm.GetSession(terminalID)
-	if err != nil {
-		tm.logger.WithError(err).WithField("terminalID", terminalID).Error("Terminal session not found")
-		ws.WriteMessage(websocket.TextMessage, []byte("Terminal session not found"))
-		return
-	}
 
 	tm.logger.WithFields(logrus.Fields{
 		"terminalID": terminalID,
@@ -221,6 +233,11 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	// Wait for done signal
 	<-adapter.Done
 	tm.logger.WithField("terminalID", terminalID).Info("Terminal stream ended")
+	defer func() {
+		session.ConnectionMutex.Lock()
+		session.ActiveConnection = false
+		session.ConnectionMutex.Unlock()
+	}()
 }
 
 // ResizeTerminal resizes a terminal session
@@ -331,10 +348,19 @@ func (a *wsTerminalAdapter) Read(p []byte) (int, error) {
 
 // Write writes to the WebSocket
 func (a *wsTerminalAdapter) Write(p []byte) (int, error) {
+	// Check if the connection is already closed
+	select {
+	case <-a.Done:
+		return 0, fmt.Errorf("connection closed")
+	default:
+		// Continue with write operation
+	}
+
 	err := a.WS.WriteMessage(websocket.BinaryMessage, p)
 	if err != nil {
 		a.Logger.WithError(err).Debug("Error writing to WebSocket")
-		close(a.Done)
+		// Instead of directly closing the Done channel, use the Close method
+		a.Close()
 		return 0, err
 	}
 	return len(p), nil
@@ -353,7 +379,7 @@ func (a *wsTerminalAdapter) Next() *remotecommand.TerminalSize {
 func (a *wsTerminalAdapter) Close() {
 	select {
 	case <-a.Done:
-		// Already closed
+		// Already closed, do nothing
 	default:
 		close(a.Done)
 	}
