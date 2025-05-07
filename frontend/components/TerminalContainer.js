@@ -1,11 +1,12 @@
-// frontend/components/TerminalContainer.js - Fix terminal ID handling
-import React, { useState, useEffect } from 'react';
+// frontend/components/TerminalContainer.js - Fix terminal session persistence
+
+import React, { useState, useEffect, useRef } from 'react';
 import Terminal from './Terminal';
 import api from '../lib/api';
 
 const TerminalContainer = ({ sessionId }) => {
     const [activeTab, setActiveTab] = useState('control-plane');
-    const [terminals, setTerminals] = useState({
+    const terminalsRef = useRef({
         'control-plane': { connected: false, id: null },
         'worker-node': { connected: false, id: null }
     });
@@ -14,6 +15,7 @@ const TerminalContainer = ({ sessionId }) => {
     // Create terminal sessions on initial load
     useEffect(() => {
         const createTerminalSession = async (target) => {
+            const terminals = terminalsRef.current;
             if (terminals[target].id || isCreatingTerminal) return;
 
             try {
@@ -22,13 +24,13 @@ const TerminalContainer = ({ sessionId }) => {
                 const result = await api.terminals.create(sessionId, target);
                 console.log(`Terminal created for ${target}:`, result);
 
-                setTerminals(prev => ({
-                    ...prev,
+                terminalsRef.current = {
+                    ...terminals,
                     [target]: {
                         id: result.terminalId,
                         connected: true
                     }
-                }));
+                };
             } catch (error) {
                 console.error(`Failed to create ${target} terminal:`, error);
             } finally {
@@ -39,24 +41,24 @@ const TerminalContainer = ({ sessionId }) => {
         if (sessionId) {
             createTerminalSession('control-plane');
         }
-    }, [sessionId, terminals, isCreatingTerminal]);
+    }, [sessionId, isCreatingTerminal]);
 
     // Create terminal for second tab when clicked
     const handleTabChange = async (target) => {
         setActiveTab(target);
 
         // Create terminal for this tab if it doesn't exist
-        if (!terminals[target].id && !isCreatingTerminal) {
+        if (!terminalsRef.current[target].id && !isCreatingTerminal) {
             try {
                 setIsCreatingTerminal(true);
                 const result = await api.terminals.create(sessionId, target);
-                setTerminals(prev => ({
-                    ...prev,
+                terminalsRef.current = {
+                    ...terminalsRef.current,
                     [target]: {
                         id: result.terminalId,
                         connected: true
                     }
-                }));
+                };
             } catch (error) {
                 console.error(`Failed to create ${target} terminal:`, error);
             } finally {
@@ -82,10 +84,10 @@ const TerminalContainer = ({ sessionId }) => {
                 </button>
             </div>
             <div className="flex-1 overflow-hidden">
-                {terminals[activeTab].id ? (
+                {terminalsRef.current[activeTab].id ? (
                     <Terminal
                         sessionId={sessionId}
-                        terminalId={terminals[activeTab].id}
+                        terminalId={terminalsRef.current[activeTab].id}
                         target={activeTab}
                     />
                 ) : (

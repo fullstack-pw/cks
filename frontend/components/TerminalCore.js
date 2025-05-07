@@ -1,4 +1,4 @@
-// frontend/components/TerminalCore.js - Fix terminal data handling
+// frontend/components/TerminalCore.js - Fix terminal rendering
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
@@ -19,6 +19,7 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
 
   // Set up terminal and WebSocket connection
   useEffect(() => {
+    // Make sure the DOM element is available
     if (!terminalRef.current) return;
 
     // Initialize terminal
@@ -50,24 +51,31 @@ const TerminalCore = ({ sessionId, terminalId, target }) => {
       terminal.current.loadAddon(searchAddon);
       terminal.current.loadAddon(webLinksAddon);
 
-      // Open terminal
-      terminal.current.open(terminalRef.current);
-      console.log('Terminal opened successfully');
-
-      // Fit terminal to container
+      // Use a small timeout to ensure the DOM element is fully ready
       setTimeout(() => {
-        if (fitAddon.current) {
-          try {
-            fitAddon.current.fit();
-            console.log('Terminal fit successful');
-          } catch (error) {
-            console.error('Terminal fit error:', error);
-          }
-        }
-      }, 100);
+        try {
+          // Open terminal
+          terminal.current.open(terminalRef.current);
+          console.log('Terminal opened successfully');
 
-      // Connect terminal to WebSocket
-      connectWebSocket();
+          // Fit terminal to container after a small delay
+          setTimeout(() => {
+            if (fitAddon.current) {
+              try {
+                fitAddon.current.fit();
+                console.log('Terminal fit successful');
+              } catch (error) {
+                console.error('Terminal fit error:', error);
+              }
+            }
+          }, 100);
+
+          // Connect WebSocket after terminal is ready
+          connectWebSocket();
+        } catch (error) {
+          console.error('Terminal open error:', error);
+        }
+      }, 50);
     };
 
     initTerminal();

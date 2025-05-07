@@ -178,7 +178,7 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: session.Container,
-			Command:   []string{"/bin/bash"},
+			Command:   []string{"su", "-", "root"},
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,

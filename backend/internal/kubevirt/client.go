@@ -571,8 +571,9 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 	}
 
 	// Split command into args
-	cmdArgs := strings.Split(command, " ")
+	cmdArgs := []string{"/bin/bash", "-c", command}
 
+	// Execute as suporte user with sudo if needed
 	stdout, stderr, err := c.executeCommand(ctx, namespace, pod, "compute", cmdArgs)
 	if err != nil {
 		return "", fmt.Errorf("command execution failed: %v, stderr: %s", err, stderr)
