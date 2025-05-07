@@ -2,62 +2,93 @@
 
 import React, { useState, useEffect } from 'react';
 import Terminal from './Terminal';
-import { useSession } from '../contexts/SessionContext';
+import api from '../lib/api';
 
 const TerminalContainer = ({ sessionId }) => {
-    const { session, createTerminal } = useSession(); // Move useSession to the component body
     const [activeTab, setActiveTab] = useState('control-plane');
     const [terminals, setTerminals] = useState({
         'control-plane': { connected: false, id: null },
         'worker-node': { connected: false, id: null }
     });
-    const [terminalSize, setTerminalSize] = useState({ width: '100%', height: '100%' });
 
     // Create terminal sessions on initial load
     useEffect(() => {
-        if (!session) return;
-
         const createTerminalSessions = async () => {
-            // Only create terminals if they don't exist yet
-            if (!terminals['control-plane'].id) {
-                await createTerminalSession('control-plane');
+            try {
+                // Create control plane terminal
+                if (!terminals['control-plane'].id) {
+                    const result = await api.terminals.create(sessionId, 'control-plane');
+                    setTerminals(prev => ({
+                        ...prev,
+                        'control-plane': {
+                            id: result.terminalId,
+                            connected: true
+                        }
+                    }));
+                }
+            } catch (error) {
+                console.error('Failed to create terminal session:', error);
             }
         };
 
-        createTerminalSessions();
-    }, [session, terminals, createTerminal]); // Add dependencies
+        if (sessionId) {
+            createTerminalSessions();
+        }
+    }, [sessionId]);
 
-    // Function to create a terminal session
-    const createTerminalSession = async (target) => {
-        try {
-            // Use createTerminal from the useSession hook at component level
-            const result = await createTerminal(sessionId, target);
+    // Create terminal for second tab when clicked
+    const handleTabChange = async (target) => {
+        setActiveTab(target);
 
-            setTerminals(prev => ({
-                ...prev,
-                [target]: {
-                    ...prev[target],
-                    id: result.terminalId,
-                    connected: true
-                }
-            }));
-
-            return result.terminalId;
-        } catch (error) {
-            console.error('Failed to create terminal session:', error);
-            setTerminals(prev => ({
-                ...prev,
-                [target]: {
-                    ...prev[target],
-                    connected: false,
-                    error: error.message
-                }
-            }));
+        // Create terminal for this tab if it doesn't exist
+        if (!terminals[target].id) {
+            try {
+                const result = await api.terminals.create(sessionId, target);
+                setTerminals(prev => ({
+                    ...prev,
+                    [target]: {
+                        id: result.terminalId,
+                        connected: true
+                    }
+                }));
+            } catch (error) {
+                console.error(`Failed to create ${target} terminal:`, error);
+            }
         }
     };
 
-    // Rest of the component remains the same
-    // ...
+    return (
+        <div className="h-full flex flex-col">
+            <div className="bg-gray-800 px-4 py-2 text-white flex">
+                <button
+                    onClick={() => handleTabChange('control-plane')}
+                    className={`px-3 py-1 rounded ${activeTab === 'control-plane' ? 'bg-gray-700' : 'hover:bg-gray-700'}`}
+                >
+                    Control Plane
+                </button>
+                <button
+                    onClick={() => handleTabChange('worker-node')}
+                    className={`px-3 py-1 rounded ml-2 ${activeTab === 'worker-node' ? 'bg-gray-700' : 'hover:bg-gray-700'}`}
+                >
+                    Worker Node
+                </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+                {terminals[activeTab].id && (
+                    <Terminal
+                        sessionId={sessionId}
+                        terminalId={terminals[activeTab].id}
+                        target={activeTab}
+                    />
+                )}
+                {!terminals[activeTab].id && (
+                    <div className="flex justify-center items-center h-full bg-gray-800 text-white">
+                        <span>Connecting to terminal...</span>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 };
 
 export default TerminalContainer;

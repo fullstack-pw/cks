@@ -87,16 +87,19 @@ export const api = {
     }
 };
 
-// WebSocket connection for terminal
+// frontend/lib/api.js - Fix terminal WebSocket connection
+
 export const createTerminalConnection = (terminalId) => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || `${window.location.host}/api/v1`;
-    // Extract just the hostname part if the API URL starts with http:// or https://
-    const host = baseUrl.startsWith('http') ?
-        new URL(baseUrl).host :
-        baseUrl.includes('/') ? window.location.host : baseUrl;
 
-    return new WebSocket(`${protocol}//${host}/terminals/${terminalId}/attach`);
+    // Extract the host and determine correct WebSocket endpoint
+    // Development environment usually proxies WebSocket connections through the same host
+    const host = window.location.host;
+
+    // The correct path for terminal WebSocket connections
+    const wsPath = `/api/v1/terminals/${terminalId}/attach`;
+
+    return new WebSocket(`${protocol}//${host}${wsPath}`);
 };
 
 export default api;
