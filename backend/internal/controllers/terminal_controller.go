@@ -35,7 +35,6 @@ func (tc *TerminalController) RegisterRoutes(router *gin.Engine) {
 	// Terminal routes - but DON'T register the same routes that are in SessionController
 	router.POST("/api/v1/sessions/:id/terminals", tc.CreateTerminal)
 
-	// These routes should be REMOVED from SessionController
 	terminals := router.Group("/api/v1/terminals")
 	{
 		terminals.GET("/:id/attach", tc.AttachTerminal)

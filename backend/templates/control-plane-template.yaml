@@ -1,11 +1,11 @@
-# Control Plane VM for KillerKoda CKS Environment
+# Control Plane VM for cks CKS Environment
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
   name: ${CONTROL_PLANE_VM_NAME}
   namespace: ${SESSION_NAMESPACE}
   labels:
-    app: killerkoda
+    app: cks
     role: control-plane
     session: ${SESSION_ID}
     k8s-version: "${K8S_VERSION}"
@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        app: killerkoda
+        app: cks
         role: control-plane
         session: ${SESSION_ID}
     spec:

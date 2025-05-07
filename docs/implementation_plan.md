@@ -1,6 +1,6 @@
-# docs/implementation-plan.md - Detailed implementation plan for KillerKoda-Local
+# docs/implementation-plan.md - Detailed implementation plan for cks-Local
 
-# KillerKoda-Local Implementation Plan
+# cks-Local Implementation Plan
 
 ## Phase 1: Core Backend (2 weeks)
 

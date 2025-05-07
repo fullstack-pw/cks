@@ -1,10 +1,10 @@
 # docs/frontend-design.md - Technical design document for the frontend application
 
-# KillerKoda-Local Frontend Application Design
+# cks-Local Frontend Application Design
 
 ## Overview
 
-The KillerKoda-Local frontend application provides a web-based interface for users to interact with CKS practice environments. It offers scenario selection, terminal access, task tracking, and validation feedback.
+The cks-Local frontend application provides a web-based interface for users to interact with CKS practice environments. It offers scenario selection, terminal access, task tracking, and validation feedback.
 
 ## Technology Stack
 

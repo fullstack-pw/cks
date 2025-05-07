@@ -37,19 +37,9 @@ func (sc *SessionController) RegisterRoutes(router *gin.Engine) {
 		sessions.GET("/:id", sc.GetSession)
 		sessions.DELETE("/:id", sc.DeleteSession)
 		sessions.PUT("/:id/extend", sc.ExtendSession)
-		// Remove this line since it's registered by TerminalController
-		// sessions.POST("/:id/terminals", sc.CreateTerminal)
 		sessions.GET("/:id/tasks", sc.ListTasks)
 		sessions.POST("/:id/tasks/:taskId/validate", sc.ValidateTask)
 	}
-
-	// Remove these terminal routes entirely since they're now handled by TerminalController
-	// terminals := router.Group("/api/v1/terminals")
-	// {
-	//     terminals.GET("/:id/attach", sc.AttachTerminal)
-	//     terminals.POST("/:id/resize", sc.ResizeTerminal)
-	//     terminals.DELETE("/:id", sc.CloseTerminal)
-	// }
 }
 
 // CreateSession handles the creation of a new session

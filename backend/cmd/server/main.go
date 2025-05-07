@@ -1,5 +1,3 @@
-// backend/cmd/server/main.go - Main application entry point
-
 package main
 
 import (
@@ -129,9 +127,6 @@ func main() {
 
 	terminalController := controllers.NewTerminalController(terminalManager, sessionManager, logger)
 	terminalController.RegisterRoutes(router)
-
-	// Remove this line since it's already handled in terminalController.RegisterRoutes
-	// router.POST("/api/v1/sessions/:id/terminals", terminalController.CreateTerminal)
 
 	// Create HTTP server
 	server := &http.Server{

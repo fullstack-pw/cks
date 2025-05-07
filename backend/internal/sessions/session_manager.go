@@ -424,7 +424,7 @@ func (sm *SessionManager) createNamespace(ctx context.Context, namespace string)
 		ObjectMeta: metav1.ObjectMeta{
 			Name: namespace,
 			Labels: map[string]string{
-				"killerkoda.io/session": "true",
+				"cks.io/session": "true",
 			},
 		},
 	}

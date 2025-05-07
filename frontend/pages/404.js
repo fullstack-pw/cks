@@ -9,7 +9,7 @@ export default function Custom404() {
     return (
         <Layout>
             <Head>
-                <title>Page Not Found | KillerKoda CKS</title>
+                <title>Page Not Found | cks CKS</title>
             </Head>
 
             <div className="min-h-full px-4 py-16 sm:px-6 sm:py-24 md:grid md:place-items-center lg:px-8">

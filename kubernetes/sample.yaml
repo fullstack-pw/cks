@@ -1,17 +1,17 @@
-# kubernetes/deployment.yaml - Kubernetes deployment configuration for KillerKoda-Local
+# kubernetes/deployment.yaml - Kubernetes deployment configuration for cks-Local
 
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: killerkoda
+  name: cks
   labels:
-    app: killerkoda
+    app: cks
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: killerkoda-config
-  namespace: killerkoda
+  name: cks-config
+  namespace: cks
 data:
   # Server settings
   SERVER_HOST: "0.0.0.0"
@@ -37,13 +37,13 @@ data:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: killerkoda-sa
-  namespace: killerkoda
+  name: cks-sa
+  namespace: cks
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: killerkoda-role
+  name: cks-role
 rules:
   - apiGroups: [""]
     resources: ["namespaces", "pods", "services", "configmaps", "secrets"]
@@ -55,30 +55,31 @@ rules:
     resources: ["datavolumes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["subresources.kubevirt.io"]
-    resources: ["virtualmachineinstances/console", "virtualmachineinstances/vnc"]
+    resources:
+      ["virtualmachineinstances/console", "virtualmachineinstances/vnc"]
     verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: killerkoda-binding
+  name: cks-binding
 subjects:
   - kind: ServiceAccount
-    name: killerkoda-sa
-    namespace: killerkoda
+    name: cks-sa
+    namespace: cks
 roleRef:
   kind: ClusterRole
-  name: killerkoda-role
+  name: cks-role
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: killerkoda-backend
-  namespace: killerkoda
+  name: cks-backend
+  namespace: cks
 spec:
   selector:
-    app: killerkoda
+    app: cks
     component: backend
   ports:
     - port: 8080
@@ -89,11 +90,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: killerkoda-frontend
-  namespace: killerkoda
+  name: cks-frontend
+  namespace: cks
 spec:
   selector:
-    app: killerkoda
+    app: cks
     component: frontend
   ports:
     - port: 80
@@ -104,8 +105,8 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: killerkoda-ingress
-  namespace: killerkoda
+  name: cks-ingress
+  namespace: cks
   annotations:
     nginx.ingress.kubernetes.io/rewrite-target: /
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
@@ -113,56 +114,56 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: "10m"
 spec:
   rules:
-    - host: killerkoda.local
+    - host: cks.local
       http:
         paths:
           - path: /api
             pathType: Prefix
             backend:
               service:
-                name: killerkoda-backend
+                name: cks-backend
                 port:
                   number: 8080
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: killerkoda-frontend
+                name: cks-frontend
                 port:
                   number: 80
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: killerkoda-backend
-  namespace: killerkoda
+  name: cks-backend
+  namespace: cks
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: killerkoda
+      app: cks
       component: backend
   template:
     metadata:
       labels:
-        app: killerkoda
+        app: cks
         component: backend
     spec:
-      serviceAccountName: killerkoda-sa
+      serviceAccountName: cks-sa
       containers:
         - name: backend
-          image: killerkoda/backend:latest
+          image: cks/backend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:
             - configMapRef:
-                name: killerkoda-config
+                name: cks-config
           volumeMounts:
             - name: templates
-              mountPath: /etc/killerkoda/templates
+              mountPath: /etc/cks/templates
             - name: scenarios
-              mountPath: /etc/killerkoda/scenarios
+              mountPath: /etc/cks/scenarios
           resources:
             limits:
               cpu: "1"
@@ -185,31 +186,31 @@ spec:
       volumes:
         - name: templates
           configMap:
-            name: killerkoda-templates
+            name: cks-templates
         - name: scenarios
           configMap:
-            name: killerkoda-scenarios
+            name: cks-scenarios
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: killerkoda-frontend
-  namespace: killerkoda
+  name: cks-frontend
+  namespace: cks
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: killerkoda
+      app: cks
       component: frontend
   template:
     metadata:
       labels:
-        app: killerkoda
+        app: cks
         component: frontend
     spec:
       containers:
         - name: frontend
-          image: killerkoda/frontend:latest
+          image: cks/frontend:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
@@ -239,21 +240,21 @@ spec:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: killerkoda-templates
-  namespace: killerkoda
+  name: cks-templates
+  namespace: cks
 data:
   # This would include the template files
   # Templates are omitted for brevity but would include all the necessary
   # template files for VM creation
   "control-plane-template.yaml": |
-    # Control Plane VM for KillerKoda CKS Environment
+    # Control Plane VM for cks CKS Environment
     apiVersion: kubevirt.io/v1
     kind: VirtualMachine
     metadata:
       name: ${CONTROL_PLANE_VM_NAME}
       namespace: ${SESSION_NAMESPACE}
       labels:
-        app: killerkoda
+        app: cks
         role: control-plane
         session: ${SESSION_ID}
         k8s-version: "${K8S_VERSION}"
@@ -262,7 +263,7 @@ data:
       template:
         metadata:
           labels:
-            app: killerkoda
+            app: cks
             role: control-plane
             session: ${SESSION_ID}
         spec:
@@ -300,14 +301,14 @@ data:
                     enp1s0:
                       dhcp4: true
                       dhcp-identifier: mac
-  
+
   # Additional templates would be included here...
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: killerkoda-scenarios
-  namespace: killerkoda
+  name: cks-scenarios
+  namespace: cks
 data:
   # This would include the scenario definitions
   # A sample scenario structure is included below

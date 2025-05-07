@@ -9,14 +9,14 @@ export default function About() {
     return (
         <Layout>
             <Head>
-                <title>About | KillerKoda CKS Practice</title>
-                <meta name="description" content="About the KillerKoda CKS Practice environment" />
+                <title>About | cks CKS Practice</title>
+                <meta name="description" content="About the cks CKS Practice environment" />
             </Head>
 
             <div className="bg-white">
                 <div className="max-w-7xl mx-auto py-16 px-4 sm:py-24 sm:px-6 lg:px-8">
                     <div className="text-center">
-                        <h1 className="mt-1 text-4xl font-extrabold text-gray-900 sm:text-5xl sm:tracking-tight lg:text-6xl">About KillerKoda CKS</h1>
+                        <h1 className="mt-1 text-4xl font-extrabold text-gray-900 sm:text-5xl sm:tracking-tight lg:text-6xl">About cks CKS</h1>
                         <p className="max-w-xl mt-5 mx-auto text-xl text-gray-500">
                             Practice for the Certified Kubernetes Security Specialist exam with hands-on scenarios.
                         </p>
@@ -29,12 +29,12 @@ export default function About() {
                     <div className="relative lg:grid lg:grid-cols-3 lg:gap-x-8">
                         <div className="lg:col-span-1">
                             <h2 className="text-3xl font-extrabold tracking-tight text-gray-900 sm:text-4xl">
-                                What is KillerKoda CKS?
+                                What is cks CKS?
                             </h2>
                         </div>
                         <div className="mt-6 lg:mt-0 lg:col-span-2">
                             <p className="text-lg text-gray-500">
-                                KillerKoda CKS is a self-hosted practice environment for the Certified Kubernetes Security Specialist (CKS) exam. It provides hands-on scenarios that simulate real-world security challenges in Kubernetes environments.
+                                cks CKS is a self-hosted practice environment for the Certified Kubernetes Security Specialist (CKS) exam. It provides hands-on scenarios that simulate real-world security challenges in Kubernetes environments.
                             </p>
                             <p className="mt-4 text-lg text-gray-500">
                                 Our platform creates isolated Kubernetes clusters using KubeVirt, allowing you to practice security techniques in a sandbox environment that closely resembles the actual CKS exam.

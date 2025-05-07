@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 import ErrorBoundary from './ErrorBoundary';
 
-const Layout = ({ children, title = 'KillerKoda CKS Practice', hideHeader = false }) => {
+const Layout = ({ children, title = 'cks CKS Practice', hideHeader = false }) => {
     const router = useRouter();
 
     return (
@@ -25,15 +25,15 @@ const Layout = ({ children, title = 'KillerKoda CKS Practice', hideHeader = fals
                                 <div className="flex">
                                     <div className="flex-shrink-0 flex items-center">
                                         <Link href="/" className="text-2xl font-bold text-indigo-600">
-                                            KillerKoda
+                                            cks
                                         </Link>
                                     </div>
                                     <nav className="ml-6 flex space-x-8">
                                         <Link
                                             href="/"
                                             className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium ${router.pathname === '/'
-                                                    ? 'border-indigo-500 text-gray-900'
-                                                    : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                                                ? 'border-indigo-500 text-gray-900'
+                                                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
                                                 }`}
                                         >
                                             Scenarios
@@ -41,8 +41,8 @@ const Layout = ({ children, title = 'KillerKoda CKS Practice', hideHeader = fals
                                         <Link
                                             href="/about"
                                             className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium ${router.pathname === '/about'
-                                                    ? 'border-indigo-500 text-gray-900'
-                                                    : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
+                                                ? 'border-indigo-500 text-gray-900'
+                                                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
                                                 }`}
                                         >
                                             About
@@ -73,7 +73,7 @@ const Layout = ({ children, title = 'KillerKoda CKS Practice', hideHeader = fals
                     <footer className="bg-white border-t border-gray-200">
                         <div className="max-w-7xl mx-auto py-6 px-4 sm:px-6 lg:px-8">
                             <p className="text-center text-sm text-gray-500">
-                                &copy; {new Date().getFullYear()} KillerKoda-Local CKS Practice. All rights reserved.
+                                &copy; {new Date().getFullYear()} cks-Local CKS Practice. All rights reserved.
                             </p>
                         </div>
                     </footer>

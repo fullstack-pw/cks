@@ -63,7 +63,7 @@ export default function Home() {
     return (
         <div className="container mx-auto px-4 py-8">
             <Head>
-                <title>KillerKoda CKS - Interactive Kubernetes Security Training</title>
+                <title>cks CKS - Interactive Kubernetes Security Training</title>
                 <meta name="description" content="Practice for the CKS certification with interactive Kubernetes environments" />
             </Head>
 

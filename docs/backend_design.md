@@ -1,10 +1,10 @@
 # docs/backend-design.md - Technical design document for the backend service
 
-# KillerKoda-Local Backend Service Design
+# cks-Local Backend Service Design
 
 ## Overview
 
-The KillerKoda-Local backend service is responsible for managing CKS practice environments, provisioning Kubernetes clusters using KubeVirt, and facilitating scenario execution and validation. This document outlines the technical design of this service.
+The cks-Local backend service is responsible for managing CKS practice environments, provisioning Kubernetes clusters using KubeVirt, and facilitating scenario execution and validation. This document outlines the technical design of this service.
 
 ## Architecture
 
@@ -248,7 +248,7 @@ SERVER_HOST=0.0.0.0
 LOG_LEVEL=info
 
 # Kubernetes configuration
-KUBECONFIG_PATH=/etc/killerkoda/kubeconfig
+KUBECONFIG_PATH=/etc/cks/kubeconfig
 IN_CLUSTER=true
 
 # Session configuration

@@ -108,7 +108,7 @@ export default function LabPage() {
     return (
         <div className="h-screen flex flex-col">
             <Head>
-                <title>Lab Environment | KillerKoda CKS</title>
+                <title>Lab Environment | cks CKS</title>
             </Head>
 
             {/* Header with session info */}

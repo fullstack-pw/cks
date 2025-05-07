@@ -1,10 +1,10 @@
-# docs/development-roadmap.md - Development roadmap for the KillerKoda-Local project
+# docs/development-roadmap.md - Development roadmap for the cks-Local project
 
-# KillerKoda-Local Development Roadmap
+# cks-Local Development Roadmap
 
 ## Overview
 
-This roadmap outlines the development process for the KillerKoda-Local platform, providing a clear timeline and milestones for implementation. The project is structured in sprints with specific deliverables and acceptance criteria for each phase.
+This roadmap outlines the development process for the cks-Local platform, providing a clear timeline and milestones for implementation. The project is structured in sprints with specific deliverables and acceptance criteria for each phase.
 
 ## Project Timeline
 
@@ -352,7 +352,7 @@ This roadmap outlines the development process for the KillerKoda-Local platform,
 
 ## Success Criteria
 
-The KillerKoda-Local project will be considered successful when:
+The cks-Local project will be considered successful when:
 
 1. **Technical Criteria**:
    - Platform can run 10+ concurrent lab environments
@@ -410,4 +410,4 @@ The KillerKoda-Local project will be considered successful when:
 
 ## Conclusion
 
-This roadmap provides a structured approach to developing the KillerKoda-Local platform. By following this plan, the team can focus on delivering a high-quality product that meets the needs of CKS exam candidates. Regular reviews and updates to this roadmap will ensure that the project stays on track and adapts to changing requirements.
+This roadmap provides a structured approach to developing the cks-Local platform. By following this plan, the team can focus on delivering a high-quality product that meets the needs of CKS exam candidates. Regular reviews and updates to this roadmap will ensure that the project stays on track and adapts to changing requirements.

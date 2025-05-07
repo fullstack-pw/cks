@@ -1,6 +1,6 @@
 # docs/scenario-design.md - Design document for the scenario definition system
 
-# KillerKoda-Local Scenario Definition System
+# cks-Local Scenario Definition System
 
 ## Overview
 

@@ -1,11 +1,11 @@
-# Worker Node VM for KillerKoda CKS Environment
+# Worker Node VM for cks CKS Environment
 apiVersion: kubevirt.io/v1
 kind: VirtualMachine
 metadata:
   name: ${WORKER_VM_NAME}
   namespace: ${SESSION_NAMESPACE}
   labels:
-    app: killerkoda
+    app: cks
     role: worker
     session: ${SESSION_ID}
     k8s-version: "${K8S_VERSION}"
@@ -14,7 +14,7 @@ spec:
   template:
     metadata:
       labels:
-        app: killerkoda
+        app: cks
         role: worker
         session: ${SESSION_ID}
     spec:
