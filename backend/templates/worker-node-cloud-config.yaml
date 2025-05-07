@@ -1,6 +1,6 @@
 #cloud-config
 hostname: ${WORKER_VM_NAME}
-manage_etc_hosts: true
+manage_etc_hosts: false
 package_update: true
 package_upgrade: true
 packages:
@@ -81,8 +81,10 @@ runcmd:
   - echo "${CONTROL_PLANE_IP} ${CONTROL_PLANE_VM_NAME}" >> /etc/hosts
   - cat /etc/hosts
   # Join the Kubernetes cluster
-  - eval $JOIN_COMMAND --ignore-preflight-errors=NumCPU,Mem
-  - echo "${JOIN}"
+  - eval "$JOIN_COMMAND --ignore-preflight-errors=NumCPU,Mem"
+  - echo "Kubernetes eval join command executed"
+  - bash -c "${JOIN_COMMAND} --ignore-preflight-errors=NumCPU,Mem"
+  - echo "Kubernetes bash -c join command executed"
 
 users:
   - name: suporte
