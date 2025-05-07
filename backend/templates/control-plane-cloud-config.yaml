@@ -106,6 +106,9 @@ runcmd:
   - curl -L --remote-name-all https://github.com/cilium/cilium-cli/releases/latest/download/cilium-linux-amd64.tar.gz
   - tar xzvfC cilium-linux-amd64.tar.gz /usr/local/bin
   - rm cilium-linux-amd64.tar.gz
+  - export HOME=/root
+  - export XDG_CACHE_HOME=/root/.cache
+  - mkdir -p $XDG_CACHE_HOME
   - cilium install --version 1.17.3
 
   # Allow workloads on the control plane
