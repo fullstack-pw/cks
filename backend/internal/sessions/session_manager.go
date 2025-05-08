@@ -308,6 +308,11 @@ func (sm *SessionManager) RegisterTerminalSession(sessionID, terminalID, target 
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
+	// Initialize map if nil
+	if session.TerminalSessions == nil {
+		session.TerminalSessions = make(map[string]string)
+	}
+
 	session.TerminalSessions[terminalID] = target
 
 	sm.logger.WithFields(logrus.Fields{
@@ -329,6 +334,11 @@ func (sm *SessionManager) UnregisterTerminalSession(sessionID, terminalID string
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
+	// Check if TerminalSessions map exists
+	if session.TerminalSessions == nil {
+		return nil // Nothing to unregister
+	}
+
 	delete(session.TerminalSessions, terminalID)
 
 	sm.logger.WithFields(logrus.Fields{
@@ -340,10 +350,10 @@ func (sm *SessionManager) UnregisterTerminalSession(sessionID, terminalID string
 }
 
 func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *models.Session) error {
-	// Update session status
-	sm.lock.Lock()
-	session.Status = models.SessionStatusProvisioning
-	sm.lock.Unlock()
+	// Update session status with proper locking
+	if err := sm.UpdateSessionStatus(session.ID, models.SessionStatusProvisioning, ""); err != nil {
+		return fmt.Errorf("failed to update session status: %w", err)
+	}
 
 	sm.logger.WithField("sessionID", session.ID).Info("Provisioning environment")
 
@@ -351,6 +361,8 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 	err := sm.kubevirtClient.VerifyKubeVirtAvailable(ctx)
 	if err != nil {
 		sm.logger.WithError(err).Error("Failed to verify KubeVirt availability")
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to verify KubeVirt availability: %v", err))
 		return fmt.Errorf("failed to verify KubeVirt availability: %w", err)
 	}
 
@@ -359,6 +371,8 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 	defer cancelNamespace()
 	err = sm.createNamespace(namespaceCtx, session.Namespace)
 	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to create namespace: %v", err))
 		return fmt.Errorf("failed to create namespace: %w", err)
 	}
 
@@ -371,6 +385,8 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 	sm.logger.WithField("namespace", session.Namespace).Info("Setting up resource quotas")
 	err = sm.setupResourceQuotas(quotaCtx, session.Namespace)
 	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to set up resource quotas: %v", err))
 		return fmt.Errorf("failed to set up resource quotas: %w", err)
 	}
 
@@ -383,6 +399,8 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 	sm.logger.WithField("sessionID", session.ID).Info("Creating KubeVirt VMs")
 	err = sm.kubevirtClient.CreateCluster(vmCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
 	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to create VMs: %v", err))
 		return fmt.Errorf("failed to create VMs: %w", err)
 	}
 
@@ -392,6 +410,8 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 	sm.logger.WithField("sessionID", session.ID).Info("Waiting for VMs to be ready")
 	err = sm.kubevirtClient.WaitForVMsReady(waitCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
 	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed waiting for VMs: %v", err))
 		return fmt.Errorf("failed waiting for VMs: %w", err)
 	}
 
@@ -402,14 +422,16 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 		sm.logger.WithField("sessionID", session.ID).Info("Initializing scenario")
 		err = sm.initializeScenario(scenarioCtx, session)
 		if err != nil {
+			// Update status to failed
+			sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to initialize scenario: %v", err))
 			return fmt.Errorf("failed to initialize scenario: %w", err)
 		}
 	}
 
-	// Update session status
-	sm.lock.Lock()
-	session.Status = models.SessionStatusRunning
-	sm.lock.Unlock()
+	// Update final status with proper locking
+	if err := sm.UpdateSessionStatus(session.ID, models.SessionStatusRunning, ""); err != nil {
+		return fmt.Errorf("failed to update session status: %w", err)
+	}
 
 	sm.logger.WithField("sessionID", session.ID).Info("Environment provisioned successfully")
 	return nil
@@ -542,26 +564,62 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 		case <-ticker.C:
 			sm.logger.Debug("Running session cleanup")
 
-			sm.lock.Lock()
-			expiredSessions := make([]string, 0)
-			now := time.Now()
+			// Use a context with timeout for cleanup operations
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 
 			// Find expired sessions
-			for id, session := range sm.sessions {
-				if now.After(session.ExpirationTime) {
-					expiredSessions = append(expiredSessions, id)
-				}
-			}
-			sm.lock.Unlock()
+			expiredSessions := make([]string, 0)
 
-			// Clean up expired sessions
+			func() {
+				sm.lock.Lock()
+				defer sm.lock.Unlock()
+
+				now := time.Now()
+
+				// Find expired sessions
+				for id, session := range sm.sessions {
+					if now.After(session.ExpirationTime) &&
+						session.Status != models.SessionStatusFailed {
+						expiredSessions = append(expiredSessions, id)
+
+						// Mark as failed to prevent race conditions
+						session.Status = models.SessionStatusFailed
+						session.StatusMessage = "Session expired"
+					}
+				}
+			}()
+
+			// Clean up marked sessions outside the lock
 			for _, id := range expiredSessions {
 				sm.logger.WithField("sessionID", id).Info("Cleaning up expired session")
-				err := sm.DeleteSession(context.Background(), id)
-				if err != nil {
-					sm.logger.WithError(err).WithField("sessionID", id).Error("Error deleting expired session")
+
+				// Get session with lock
+				var session *models.Session
+				func() {
+					sm.lock.RLock()
+					defer sm.lock.RUnlock()
+					session = sm.sessions[id]
+				}()
+
+				if session != nil {
+					// Clean up resources
+					err := sm.cleanupEnvironment(ctx, session)
+					if err != nil {
+						sm.logger.WithError(err).WithField("sessionID", id).Error("Error cleaning up expired session environment")
+					}
+
+					// Now remove from sessions map with proper locking
+					sm.lock.Lock()
+					delete(sm.sessions, id)
+					sm.lock.Unlock()
+
+					sm.logger.WithField("sessionID", id).Info("Expired session removed")
 				}
 			}
+
+			// Always cancel the context when done
+			cancel()
+
 		case <-sm.stopCh:
 			return
 		}
