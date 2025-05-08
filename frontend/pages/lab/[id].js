@@ -1,9 +1,11 @@
+// frontend/pages/lab/[id].js - Updated version using the consolidated hooks
+
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import TerminalContainer from '../../components/TerminalContainer';
 import TaskPanel from '../../components/TaskPanel';
-import { useSession } from '../../contexts/SessionContext';
+import { useSession } from '../../hooks/useSession';
 import ResizablePanel from '../../components/ResizablePanel';
 
 // Specify that this page should hide the header
@@ -12,16 +14,9 @@ LabPage.hideHeader = true;
 export default function LabPage() {
     const router = useRouter();
     const { id } = router.query;
-    const { session, loading, error, fetchSession, extendSession } = useSession();
+    const { session, isLoading, isError, error, extendSession } = useSession(id);
     const [timeRemaining, setTimeRemaining] = useState(0);
     const [splitSize, setSplitSize] = useState(65);
-
-    // Fetch session on initial load
-    useEffect(() => {
-        if (id) {
-            fetchSession(id);
-        }
-    }, [id]);
 
     // Calculate time remaining
     useEffect(() => {
@@ -52,7 +47,7 @@ export default function LabPage() {
         }
     };
 
-    if (loading) {
+    if (isLoading) {
         return (
             <div className="flex items-center justify-center h-screen bg-gray-100">
                 <div className="text-center">
@@ -63,12 +58,12 @@ export default function LabPage() {
         );
     }
 
-    if (error) {
+    if (isError) {
         return (
             <div className="flex items-center justify-center h-screen bg-gray-100">
                 <div className="bg-white p-8 rounded-lg shadow-md max-w-md">
                     <h2 className="text-xl font-semibold text-red-600 mb-4">Error Loading Lab Environment</h2>
-                    <p className="text-gray-700 mb-4">{error.message || 'Failed to load session data'}</p>
+                    <p className="text-gray-700 mb-4">{error?.message || 'Failed to load session data'}</p>
                     <div className="flex space-x-4">
                         <button
                             onClick={() => router.reload()}

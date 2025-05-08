@@ -1,7 +1,8 @@
-// frontend/contexts/SessionContext.js - Context provider for session state
+// frontend/contexts/SessionContext.js - Updated version with SWR integration
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
+import { mutate } from 'swr';
 import api from '../lib/api';
 
 // Create context
@@ -9,18 +10,19 @@ const SessionContext = createContext(null);
 
 // Context provider component
 export const SessionProvider = ({ children }) => {
-    const [session, setSession] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const router = useRouter();
 
-    // Extract session ID from URL if on lab page
-    useEffect(() => {
-        const { pathname, query } = router;
-        if (pathname.startsWith('/lab/') && query.id) {
-            fetchSession(query.id);
+    // Global fetcher function for SWR
+    const fetcher = async (url) => {
+        try {
+            return await api.sessions.get(url.split('/').pop());
+        } catch (err) {
+            setError(err);
+            throw err;
         }
-    }, [router.pathname, router.query]);
+    };
 
     // Create a new session
     const createSession = async (scenarioId) => {
@@ -29,36 +31,12 @@ export const SessionProvider = ({ children }) => {
 
         try {
             const result = await api.sessions.create(scenarioId);
-            setSession(result);
+            // Prefetch the session data for SWR
+            mutate(`/sessions/${result.sessionId}`, result, false);
             router.push(`/lab/${result.sessionId}`);
             return result;
         } catch (err) {
             setError(err);
-            throw err;
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    // Fetch session details
-    const fetchSession = async (sessionId) => {
-        if (!sessionId) return;
-
-        setLoading(true);
-        setError(null);
-
-        try {
-            const session = await api.sessions.get(sessionId);
-            setSession(session);
-            return session;
-        } catch (err) {
-            setError(err);
-
-            // Redirect to home page if session not found
-            if (err.status === 404) {
-                router.push('/');
-            }
-
             throw err;
         } finally {
             setLoading(false);
@@ -72,7 +50,8 @@ export const SessionProvider = ({ children }) => {
 
         try {
             await api.sessions.delete(sessionId);
-            setSession(null);
+            // Invalidate the cache for this session
+            mutate(`/sessions/${sessionId}`, null, false);
             router.push('/');
         } catch (err) {
             setError(err);
@@ -89,8 +68,9 @@ export const SessionProvider = ({ children }) => {
 
         try {
             await api.sessions.extend(sessionId, minutes);
-            // Refresh session data
-            return fetchSession(sessionId);
+            // Revalidate to get updated session data
+            mutate(`/sessions/${sessionId}`);
+            return true;
         } catch (err) {
             setError(err);
             throw err;
@@ -106,8 +86,8 @@ export const SessionProvider = ({ children }) => {
 
         try {
             const result = await api.tasks.validate(sessionId, taskId);
-            // Refresh session data
-            await fetchSession(sessionId);
+            // Revalidate to get updated session data
+            mutate(`/sessions/${sessionId}`);
             return result;
         } catch (err) {
             setError(err);
@@ -117,7 +97,7 @@ export const SessionProvider = ({ children }) => {
         }
     };
 
-    // Create a terminal
+    // Create a terminal session
     const createTerminal = async (sessionId, target) => {
         try {
             return await api.terminals.create(sessionId, target);
@@ -129,15 +109,19 @@ export const SessionProvider = ({ children }) => {
 
     // The context value
     const value = {
-        session,
+        // State
         loading,
         error,
+
+        // Actions
         createSession,
-        fetchSession,
         deleteSession,
         extendSession,
         validateTask,
         createTerminal,
+
+        // Helper for components to use SWR directly
+        fetcher
     };
 
     return (
@@ -148,10 +132,10 @@ export const SessionProvider = ({ children }) => {
 };
 
 // Custom hook to use the session context
-export const useSession = () => {
+export const useSessionContext = () => {
     const context = useContext(SessionContext);
     if (!context) {
-        throw new Error('useSession must be used within a SessionProvider');
+        throw new Error('useSessionContext must be used within a SessionProvider');
     }
     return context;
 };

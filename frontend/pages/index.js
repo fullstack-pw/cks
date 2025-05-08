@@ -1,4 +1,4 @@
-// frontend/pages/index.js - Fixed Home page component
+// frontend/pages/index.js - Updated version
 
 import React, { useState, useEffect } from 'react';
 import Head from 'next/head';
@@ -6,9 +6,11 @@ import { useRouter } from 'next/router';
 import ScenarioFilter from '../components/ScenarioFilter';
 import ScenarioList from '../components/ScenarioList';
 import api from '../lib/api';
+import { useSession } from '../hooks/useSession';
 
 export default function Home() {
     const router = useRouter();
+    const { createSession } = useSession();
     const [scenarios, setScenarios] = useState([]);
     const [categories, setCategories] = useState({});
     const [loading, setLoading] = useState(true);
@@ -51,8 +53,8 @@ export default function Home() {
     const handleStartScenario = async (scenarioId) => {
         try {
             setLoading(true);
-            const result = await api.sessions.create(scenarioId);
-            router.push(`/lab/${result.sessionId}`);
+            await createSession(scenarioId);
+            // Note: The router.push is now handled in the createSession function
         } catch (err) {
             console.error('Failed to create session:', err);
             setError('Failed to create session. Please try again.');
