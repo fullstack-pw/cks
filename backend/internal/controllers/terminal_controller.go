@@ -3,31 +3,32 @@
 package controllers
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
 	"github.com/fullstack-pw/cks/backend/internal/models"
-	"github.com/fullstack-pw/cks/backend/internal/sessions"
-	"github.com/fullstack-pw/cks/backend/internal/terminal"
+	"github.com/fullstack-pw/cks/backend/internal/services"
 )
 
 // TerminalController handles HTTP requests related to terminal sessions
 type TerminalController struct {
-	terminalManager *terminal.Manager
-	sessionManager  *sessions.SessionManager
+	terminalService services.TerminalService
+	sessionService  services.SessionService
 	logger          *logrus.Logger
 }
 
 // NewTerminalController creates a new terminal controller
-func NewTerminalController(terminalManager *terminal.Manager, sessionManager *sessions.SessionManager, logger *logrus.Logger) *TerminalController {
+func NewTerminalController(
+	terminalService services.TerminalService,
+	sessionService services.SessionService,
+	logger *logrus.Logger,
+) *TerminalController {
 	return &TerminalController{
-		terminalManager: terminalManager,
-		sessionManager:  sessionManager,
+		terminalService: terminalService,
+		sessionService:  sessionService,
 		logger:          logger,
 	}
 }
@@ -57,7 +58,7 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 	}
 
 	// Check if session exists
-	session, err := tc.sessionManager.GetSession(sessionID)
+	session, err := tc.sessionService.GetSession(sessionID)
 	if err != nil {
 		tc.logger.WithError(err).WithField("sessionID", sessionID).Error("Session not found")
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
@@ -89,24 +90,20 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// Create context with timeout for terminal operations
-	_, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
-	defer cancel()
-
 	// Create terminal session
-	terminalID, err := tc.terminalManager.CreateSession(sessionID, session.Namespace, targetVM)
+	terminalID, err := tc.terminalService.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to create terminal session")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create terminal: %v", err)})
 		return
 	}
 
-	// Register terminal with session manager
-	err = tc.sessionManager.RegisterTerminalSession(sessionID, terminalID, request.Target)
+	// Register terminal with session service
+	err = tc.sessionService.RegisterTerminalSession(sessionID, terminalID, request.Target)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to register terminal session")
 		// Try to close the terminal session we just created
-		closeErr := tc.terminalManager.CloseSession(terminalID)
+		closeErr := tc.terminalService.CloseSession(terminalID)
 		if closeErr != nil {
 			tc.logger.WithError(closeErr).WithField("terminalID", terminalID).Error("Failed to clean up terminal after registration failure")
 		}
@@ -137,8 +134,8 @@ func (tc *TerminalController) AttachTerminal(c *gin.Context) {
 	c.Header("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept")
 	c.Header("Access-Control-Allow-Credentials", "true")
 
-	// Handle WebSocket
-	tc.terminalManager.HandleTerminal(c.Writer, c.Request, terminalID)
+	// Handle WebSocket using the service
+	tc.terminalService.HandleTerminal(c.Writer, c.Request, terminalID)
 }
 
 // ResizeTerminal handles terminal resize events
@@ -163,8 +160,8 @@ func (tc *TerminalController) ResizeTerminal(c *gin.Context) {
 		return
 	}
 
-	// Resize terminal
-	err := tc.terminalManager.ResizeTerminal(terminalID, request.Rows, request.Cols)
+	// Resize terminal using the service
+	err := tc.terminalService.ResizeTerminal(terminalID, request.Rows, request.Cols)
 	if err != nil {
 		tc.logger.WithError(err).WithField("terminalID", terminalID).Error("Failed to resize terminal")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to resize terminal: %v", err)})
@@ -184,12 +181,8 @@ func (tc *TerminalController) ResizeTerminal(c *gin.Context) {
 func (tc *TerminalController) CloseTerminal(c *gin.Context) {
 	terminalID := c.Param("id")
 
-	// Create context with timeout for terminal operations
-	_, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
-	defer cancel()
-
-	// Close terminal session
-	err := tc.terminalManager.CloseSession(terminalID)
+	// Close terminal session using the service
+	err := tc.terminalService.CloseSession(terminalID)
 	if err != nil {
 		tc.logger.WithError(err).WithField("terminalID", terminalID).Error("Failed to close terminal")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to close terminal: %v", err)})
@@ -197,12 +190,12 @@ func (tc *TerminalController) CloseTerminal(c *gin.Context) {
 	}
 
 	// Unregister terminal session from all sessions
-	// (We don't know which session it belongs to, so find it)
-	sessions := tc.sessionManager.ListSessions()
+	// This needs to be refactored to be more service-oriented
+	sessions := tc.sessionService.ListSessions()
 	for _, session := range sessions {
 		for id := range session.TerminalSessions {
 			if id == terminalID {
-				unregErr := tc.sessionManager.UnregisterTerminalSession(session.ID, terminalID)
+				unregErr := tc.sessionService.UnregisterTerminalSession(session.ID, terminalID)
 				if unregErr != nil {
 					tc.logger.WithError(unregErr).WithFields(logrus.Fields{
 						"sessionID":  session.ID,

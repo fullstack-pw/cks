@@ -1,23 +1,23 @@
-// internal/controllers/scenario_controller.go - HTTP handlers for scenario management
+// backend/internal/controllers/scenario_controller.go
 
 package controllers
 
 import (
 	"net/http"
 
-	"github.com/fullstack-pw/cks/backend/internal/scenarios"
+	"github.com/fullstack-pw/cks/backend/internal/services"
 	"github.com/gin-gonic/gin"
 )
 
 // ScenarioController handles HTTP requests related to scenarios
 type ScenarioController struct {
-	scenarioManager *scenarios.ScenarioManager
+	scenarioService services.ScenarioService
 }
 
 // NewScenarioController creates a new scenario controller
-func NewScenarioController(scenarioManager *scenarios.ScenarioManager) *ScenarioController {
+func NewScenarioController(scenarioService services.ScenarioService) *ScenarioController {
 	return &ScenarioController{
-		scenarioManager: scenarioManager,
+		scenarioService: scenarioService,
 	}
 }
 
@@ -39,7 +39,7 @@ func (sc *ScenarioController) ListScenarios(c *gin.Context) {
 	searchQuery := c.Query("search")
 
 	// Get scenarios with filters
-	scenarios, err := sc.scenarioManager.ListScenarios(category, difficulty, searchQuery)
+	scenarios, err := sc.scenarioService.ListScenarios(category, difficulty, searchQuery)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -52,7 +52,7 @@ func (sc *ScenarioController) ListScenarios(c *gin.Context) {
 func (sc *ScenarioController) GetScenario(c *gin.Context) {
 	scenarioID := c.Param("id")
 
-	scenario, err := sc.scenarioManager.GetScenario(scenarioID)
+	scenario, err := sc.scenarioService.GetScenario(scenarioID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
@@ -63,7 +63,7 @@ func (sc *ScenarioController) GetScenario(c *gin.Context) {
 
 // ListCategories returns all available scenario categories
 func (sc *ScenarioController) ListCategories(c *gin.Context) {
-	categories, err := sc.scenarioManager.GetCategories()
+	categories, err := sc.scenarioService.GetCategories()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

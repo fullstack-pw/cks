@@ -9,21 +9,21 @@ import (
 	"time"
 
 	"github.com/fullstack-pw/cks/backend/internal/models"
-	"github.com/fullstack-pw/cks/backend/internal/sessions"
+	"github.com/fullstack-pw/cks/backend/internal/services"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
 
 // SessionController handles HTTP requests related to sessions
 type SessionController struct {
-	sessionManager *sessions.SessionManager
+	sessionService services.SessionService
 	logger         *logrus.Logger
 }
 
 // NewSessionController creates a new session controller
-func NewSessionController(sessionManager *sessions.SessionManager, logger *logrus.Logger) *SessionController {
+func NewSessionController(sessionService services.SessionService, logger *logrus.Logger) *SessionController {
 	return &SessionController{
-		sessionManager: sessionManager,
+		sessionService: sessionService,
 		logger:         logger,
 	}
 }
@@ -55,7 +55,7 @@ func (sc *SessionController) CreateSession(c *gin.Context) {
 	defer cancel()
 
 	// Create session
-	session, err := sc.sessionManager.CreateSession(ctx, request.ScenarioID)
+	session, err := sc.sessionService.CreateSession(ctx, request.ScenarioID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create session: %v", err)})
 		return
@@ -69,7 +69,7 @@ func (sc *SessionController) CreateSession(c *gin.Context) {
 
 // ListSessions returns a list of all active sessions
 func (sc *SessionController) ListSessions(c *gin.Context) {
-	sessions := sc.sessionManager.ListSessions()
+	sessions := sc.sessionService.ListSessions()
 	c.JSON(http.StatusOK, sessions)
 }
 
@@ -77,7 +77,7 @@ func (sc *SessionController) ListSessions(c *gin.Context) {
 func (sc *SessionController) GetSession(c *gin.Context) {
 	sessionID := c.Param("id")
 
-	session, err := sc.sessionManager.GetSession(sessionID)
+	session, err := sc.sessionService.GetSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
 		return
@@ -86,13 +86,13 @@ func (sc *SessionController) GetSession(c *gin.Context) {
 	// Add additional status check for VM readiness
 	if session.Status == models.SessionStatusProvisioning {
 		// Check VMs status
-		vmStatus, err := sc.sessionManager.CheckVMsStatus(c.Request.Context(), session)
+		vmStatus, err := sc.sessionService.CheckVMsStatus(c.Request.Context(), session)
 		if err != nil {
 			// Just log the error, don't fail the request
 			sc.logger.WithError(err).WithField("sessionID", sessionID).Warn("Failed to check VM status")
 		} else if vmStatus == "Running" {
 			// Update session status to running if VMs are ready
-			sc.sessionManager.UpdateSessionStatus(sessionID, models.SessionStatusRunning, "")
+			sc.sessionService.UpdateSessionStatus(sessionID, models.SessionStatusRunning, "")
 			session.Status = models.SessionStatusRunning
 		}
 	}
@@ -108,7 +108,7 @@ func (sc *SessionController) DeleteSession(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 	defer cancel()
 
-	err := sc.sessionManager.DeleteSession(ctx, sessionID)
+	err := sc.sessionService.DeleteSession(ctx, sessionID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to delete session: %v", err)})
 		return
@@ -134,7 +134,7 @@ func (sc *SessionController) ExtendSession(c *gin.Context) {
 		extension = time.Duration(request.Minutes) * time.Minute
 	}
 
-	err := sc.sessionManager.ExtendSession(sessionID, extension)
+	err := sc.sessionService.ExtendSession(sessionID, extension)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to extend session: %v", err)})
 		return
@@ -148,7 +148,7 @@ func (sc *SessionController) ListTasks(c *gin.Context) {
 	sessionID := c.Param("id")
 
 	// Get session to access its tasks
-	session, err := sc.sessionManager.GetSession(sessionID)
+	session, err := sc.sessionService.GetSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
 		return
@@ -163,7 +163,7 @@ func (sc *SessionController) ValidateTask(c *gin.Context) {
 	taskID := c.Param("taskId")
 
 	// Get session
-	_, err := sc.sessionManager.GetSession(sessionID)
+	_, err := sc.sessionService.GetSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
 		return
@@ -174,7 +174,7 @@ func (sc *SessionController) ValidateTask(c *gin.Context) {
 	defer cancel()
 
 	// Validate the task
-	validationResults, err := sc.sessionManager.ValidateTask(ctx, sessionID, taskID)
+	validationResults, err := sc.sessionService.ValidateTask(ctx, sessionID, taskID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Validation failed: %v", err)})
 		return

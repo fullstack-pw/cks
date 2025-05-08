@@ -1,3 +1,5 @@
+// backend/cmd/server/main.go
+
 package main
 
 import (
@@ -22,6 +24,7 @@ import (
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/middleware"
 	"github.com/fullstack-pw/cks/backend/internal/scenarios"
+	"github.com/fullstack-pw/cks/backend/internal/services"
 	"github.com/fullstack-pw/cks/backend/internal/sessions"
 	"github.com/fullstack-pw/cks/backend/internal/terminal"
 	"github.com/fullstack-pw/cks/backend/internal/validation"
@@ -118,14 +121,19 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create scenario manager")
 	}
 
-	// In main.go, update the controller registration section
-	sessionController := controllers.NewSessionController(sessionManager, logger)
+	// Create service layer implementations
+	sessionService := services.NewSessionService(sessionManager)
+	terminalService := services.NewTerminalService(terminalManager)
+	scenarioService := services.NewScenarioService(scenarioManager)
+
+	// Create and register controllers
+	sessionController := controllers.NewSessionController(sessionService, logger)
 	sessionController.RegisterRoutes(router)
 
-	terminalController := controllers.NewTerminalController(terminalManager, sessionManager, logger)
+	terminalController := controllers.NewTerminalController(terminalService, sessionService, logger)
 	terminalController.RegisterRoutes(router)
 
-	scenarioController := controllers.NewScenarioController(scenarioManager)
+	scenarioController := controllers.NewScenarioController(scenarioService)
 	scenarioController.RegisterRoutes(router)
 
 	// Create HTTP server
