@@ -1,4 +1,4 @@
-// backend/internal/controllers/terminal_controller.go - Terminal API controller
+// backend/internal/controllers/terminal_controller.go
 
 package controllers
 
@@ -30,9 +30,9 @@ func NewTerminalController(terminalManager *terminal.Manager, sessionManager *se
 	}
 }
 
-// Update the RegisterRoutes method in terminal_controller.go
+// RegisterRoutes registers terminal-related routes
 func (tc *TerminalController) RegisterRoutes(router *gin.Engine) {
-	// Terminal routes - but DON'T register the same routes that are in SessionController
+	// Terminal routes
 	router.POST("/api/v1/sessions/:id/terminals", tc.CreateTerminal)
 
 	terminals := router.Group("/api/v1/terminals")
@@ -87,7 +87,7 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// Create terminal session (removed context parameter)
+	// Create terminal session
 	terminalID, err := tc.terminalManager.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to create terminal session")

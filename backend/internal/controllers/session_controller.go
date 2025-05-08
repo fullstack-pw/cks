@@ -1,4 +1,4 @@
-// internal/controllers/session_controller.go - HTTP handlers for session management
+// backend/internal/controllers/session_controller.go
 
 package controllers
 
@@ -28,7 +28,7 @@ func NewSessionController(sessionManager *sessions.SessionManager, logger *logru
 	}
 }
 
-// Update the RegisterRoutes method in session_controller.go
+// RegisterRoutes registers the session controller routes
 func (sc *SessionController) RegisterRoutes(router *gin.Engine) {
 	sessions := router.Group("/api/v1/sessions")
 	{
@@ -38,6 +38,8 @@ func (sc *SessionController) RegisterRoutes(router *gin.Engine) {
 		sessions.DELETE("/:id", sc.DeleteSession)
 		sessions.PUT("/:id/extend", sc.ExtendSession)
 		sessions.GET("/:id/tasks", sc.ListTasks)
+		sessions.POST("/:id/tasks/:taskId/validate", sc.ValidateTask)
+		// Remove terminal-related routes from here
 	}
 }
 
@@ -154,4 +156,30 @@ func (sc *SessionController) ListTasks(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, session.Tasks)
+}
+
+// ValidateTask validates a specific task in a session
+func (sc *SessionController) ValidateTask(c *gin.Context) {
+	sessionID := c.Param("id")
+	taskID := c.Param("taskId")
+
+	// Get session
+	_, err := sc.sessionManager.GetSession(sessionID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
+		return
+	}
+
+	// Use session context for validation
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	// Validate the task
+	validationResults, err := sc.sessionManager.ValidateTask(ctx, sessionID, taskID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Validation failed: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, validationResults)
 }

@@ -122,11 +122,11 @@ func main() {
 	sessionController := controllers.NewSessionController(sessionManager, logger)
 	sessionController.RegisterRoutes(router)
 
-	scenarioController := controllers.NewScenarioController(scenarioManager)
-	scenarioController.RegisterRoutes(router)
-
 	terminalController := controllers.NewTerminalController(terminalManager, sessionManager, logger)
 	terminalController.RegisterRoutes(router)
+
+	scenarioController := controllers.NewScenarioController(scenarioManager)
+	scenarioController.RegisterRoutes(router)
 
 	// Create HTTP server
 	server := &http.Server{
