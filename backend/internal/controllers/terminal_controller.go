@@ -3,8 +3,10 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
@@ -63,7 +65,7 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 	}
 
 	// Check if session is in running state
-	if session.Status != "running" {
+	if session.Status != models.SessionStatusRunning {
 		tc.logger.WithFields(logrus.Fields{
 			"sessionID": sessionID,
 			"status":    session.Status,
@@ -87,6 +89,10 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
+	// Create context with timeout for terminal operations
+	_, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
 	// Create terminal session
 	terminalID, err := tc.terminalManager.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
@@ -100,7 +106,10 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to register terminal session")
 		// Try to close the terminal session we just created
-		_ = tc.terminalManager.CloseSession(terminalID)
+		closeErr := tc.terminalManager.CloseSession(terminalID)
+		if closeErr != nil {
+			tc.logger.WithError(closeErr).WithField("terminalID", terminalID).Error("Failed to clean up terminal after registration failure")
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to register terminal: %v", err)})
 		return
 	}
@@ -175,6 +184,10 @@ func (tc *TerminalController) ResizeTerminal(c *gin.Context) {
 func (tc *TerminalController) CloseTerminal(c *gin.Context) {
 	terminalID := c.Param("id")
 
+	// Create context with timeout for terminal operations
+	_, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
 	// Close terminal session
 	err := tc.terminalManager.CloseSession(terminalID)
 	if err != nil {
@@ -189,7 +202,13 @@ func (tc *TerminalController) CloseTerminal(c *gin.Context) {
 	for _, session := range sessions {
 		for id := range session.TerminalSessions {
 			if id == terminalID {
-				_ = tc.sessionManager.UnregisterTerminalSession(session.ID, terminalID)
+				unregErr := tc.sessionManager.UnregisterTerminalSession(session.ID, terminalID)
+				if unregErr != nil {
+					tc.logger.WithError(unregErr).WithFields(logrus.Fields{
+						"sessionID":  session.ID,
+						"terminalID": terminalID,
+					}).Warn("Failed to unregister terminal session, continuing anyway")
+				}
 				break
 			}
 		}

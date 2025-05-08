@@ -39,7 +39,6 @@ func (sc *SessionController) RegisterRoutes(router *gin.Engine) {
 		sessions.PUT("/:id/extend", sc.ExtendSession)
 		sessions.GET("/:id/tasks", sc.ListTasks)
 		sessions.POST("/:id/tasks/:taskId/validate", sc.ValidateTask)
-		// Remove terminal-related routes from here
 	}
 }
 
