@@ -1,42 +1,66 @@
-import React, { useState, useEffect, useRef } from 'react';
+// frontend/components/TerminalContainer.js - Updated implementation
+
+import React, { useState, useEffect, useCallback } from 'react';
 import Terminal from './Terminal';
 import api from '../lib/api';
 
+/**
+ * Container component for terminals that manages tabs and terminal sessions
+ * for control plane and worker nodes.
+ * 
+ * @param {Object} props
+ * @param {string} props.sessionId - The ID of the user session
+ */
 const TerminalContainer = ({ sessionId }) => {
+    // Tab management
     const [activeTab, setActiveTab] = useState('control-plane');
+
+    // Terminal sessions state
     const [terminals, setTerminals] = useState({
         'control-plane': { connected: false, id: null, isCreating: false, error: null },
         'worker-node': { connected: false, id: null, isCreating: false, error: null }
     });
-    const [ready, setReady] = useState(false);
+
+    // Session status
+    const [sessionReady, setSessionReady] = useState(false);
     const [initializing, setInitializing] = useState(true);
     const [statusMessage, setStatusMessage] = useState('Checking session status...');
+    const [statusError, setStatusError] = useState(null);
 
     // Check session status on initial load
     useEffect(() => {
-        const checkSessionStatus = async () => {
-            if (!sessionId) return;
+        if (!sessionId) return;
 
+        const checkSessionStatus = async () => {
             try {
                 setInitializing(true);
+                setStatusError(null);
+
                 const session = await api.sessions.get(sessionId);
 
                 // Check if session is running
                 if (session.status === 'running') {
-                    setReady(true);
+                    setSessionReady(true);
                     setStatusMessage('Session is ready');
+
                     // Create control plane terminal automatically
                     createTerminalSession('control-plane');
                 } else if (session.status === 'provisioning' || session.status === 'pending') {
                     setStatusMessage(`Environment is being prepared (${session.status}). This may take 5-10 minutes...`);
+
                     // Poll every 15 seconds
-                    setTimeout(checkSessionStatus, 15000);
+                    const timeoutId = setTimeout(checkSessionStatus, 15000);
+                    return () => clearTimeout(timeoutId);
+                } else if (session.status === 'failed') {
+                    setStatusError(`Session failed: ${session.statusMessage || 'Unknown error'}`);
+                    setStatusMessage('Failed to prepare environment');
                 } else {
-                    setStatusMessage(`Session error: ${session.statusMessage || session.status}`);
+                    setStatusMessage(`Session status: ${session.status}`);
                 }
             } catch (error) {
                 console.error('Failed to check session status:', error);
-                setStatusMessage('Error checking session status. Please refresh the page.');
+                setStatusError('Error checking session status: ' + (error.message || 'Unknown error'));
+                setStatusMessage('Unable to check session status');
             } finally {
                 setInitializing(false);
             }
@@ -46,7 +70,7 @@ const TerminalContainer = ({ sessionId }) => {
     }, [sessionId]);
 
     // Create a terminal session for a specific target
-    const createTerminalSession = async (target) => {
+    const createTerminalSession = useCallback(async (target) => {
         if (terminals[target].id || terminals[target].isCreating) return;
 
         try {
@@ -65,84 +89,127 @@ const TerminalContainer = ({ sessionId }) => {
                 ...prev,
                 [target]: {
                     id: result.terminalId,
-                    connected: true,
+                    connected: false, // Will be updated by Terminal component
                     isCreating: false,
                     error: null
                 }
             }));
         } catch (error) {
             console.error(`Failed to create ${target} terminal:`, error);
+
             // Update state with error
             setTerminals(prev => ({
                 ...prev,
                 [target]: {
                     ...prev[target],
                     isCreating: false,
-                    error: error.message || 'Failed to create terminal'
+                    error: error.message || `Failed to create terminal for ${target}`
                 }
             }));
         }
-    };
+    }, [sessionId, terminals]);
 
-    // Create terminal for second tab when clicked
-    const handleTabChange = (target) => {
+    // Handle connection status change from Terminal component
+    const handleConnectionChange = useCallback((target, isConnected) => {
+        setTerminals(prev => ({
+            ...prev,
+            [target]: { ...prev[target], connected: isConnected }
+        }));
+    }, []);
+
+    // Handle tab changes
+    const handleTabChange = useCallback((target) => {
         setActiveTab(target);
 
         // Create terminal for this tab if it doesn't exist
-        if (ready && !terminals[target].id && !terminals[target].isCreating) {
+        if (sessionReady && !terminals[target].id && !terminals[target].isCreating) {
             createTerminalSession(target);
         }
-    };
+    }, [sessionReady, terminals, createTerminalSession]);
 
     return (
         <div className="h-full flex flex-col">
+            {/* Terminal tabs */}
             <div className="bg-gray-800 px-4 py-2 text-white flex">
                 <button
                     onClick={() => handleTabChange('control-plane')}
-                    disabled={!ready}
-                    className={`px-3 py-1 rounded ${activeTab === 'control-plane' ? 'bg-gray-700' : 'hover:bg-gray-700'} ${!ready ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={!sessionReady}
+                    className={`px-3 py-1 rounded ${activeTab === 'control-plane' ? 'bg-gray-700' : 'hover:bg-gray-700'
+                        } ${!sessionReady ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                     Control Plane
+                    {terminals['control-plane'].connected && (
+                        <span className="ml-2 inline-block w-2 h-2 bg-green-500 rounded-full"></span>
+                    )}
                 </button>
                 <button
                     onClick={() => handleTabChange('worker-node')}
-                    disabled={!ready}
-                    className={`px-3 py-1 rounded ml-2 ${activeTab === 'worker-node' ? 'bg-gray-700' : 'hover:bg-gray-700'} ${!ready ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={!sessionReady}
+                    className={`px-3 py-1 rounded ml-2 ${activeTab === 'worker-node' ? 'bg-gray-700' : 'hover:bg-gray-700'
+                        } ${!sessionReady ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                     Worker Node
+                    {terminals['worker-node'].connected && (
+                        <span className="ml-2 inline-block w-2 h-2 bg-green-500 rounded-full"></span>
+                    )}
                 </button>
             </div>
 
+            {/* Terminal content area */}
             <div className="flex-1 overflow-hidden">
-                {!ready ? (
+                {/* Loading or error state */}
+                {!sessionReady ? (
                     <div className="flex flex-col justify-center items-center h-full bg-gray-800 text-white p-4">
-                        <div className="animate-pulse mb-4">
-                            <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                        </div>
-                        <p className="text-center">{statusMessage}</p>
-                        <p className="text-center text-sm mt-2 text-gray-400">VMs typically take about 5 minutes to initialize.</p>
+                        {initializing && (
+                            <div className="animate-pulse mb-4">
+                                <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                            </div>
+                        )}
+
+                        <p className="text-center mb-2">{statusMessage}</p>
+
+                        {statusError && (
+                            <div className="mt-4 bg-red-800 bg-opacity-50 p-3 rounded text-white max-w-md text-center">
+                                <p className="font-medium">Error</p>
+                                <p className="text-sm">{statusError}</p>
+                                <button
+                                    onClick={() => window.location.reload()}
+                                    className="mt-3 bg-red-700 hover:bg-red-600 text-white px-4 py-1 rounded text-sm"
+                                >
+                                    Reload
+                                </button>
+                            </div>
+                        )}
+
+                        {!statusError && (
+                            <p className="text-center text-sm mt-2 text-gray-400">
+                                VMs typically take about 5 minutes to initialize.
+                            </p>
+                        )}
                     </div>
                 ) : terminals[activeTab].id ? (
+                    // Terminal is created, show it
                     <Terminal
-                        sessionId={sessionId}
                         terminalId={terminals[activeTab].id}
-                        target={activeTab}
+                        sessionId={sessionId}
                     />
                 ) : (
+                    // Terminal not yet created, show loading or error
                     <div className="flex flex-col justify-center items-center h-full bg-gray-800 text-white p-4">
                         {terminals[activeTab].isCreating ? (
-                            <div className="animate-pulse">
-                                <span>Creating terminal...</span>
+                            <div className="flex flex-col items-center">
+                                <div className="animate-spin h-8 w-8 border-2 border-white rounded-full border-t-transparent mb-3"></div>
+                                <span>Creating terminal session...</span>
                             </div>
                         ) : terminals[activeTab].error ? (
-                            <div className="text-red-400">
-                                <p>Error: {terminals[activeTab].error}</p>
+                            <div className="text-center">
+                                <p className="text-red-400 mb-3">Error: {terminals[activeTab].error}</p>
                                 <button
                                     onClick={() => createTerminalSession(activeTab)}
-                                    className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                                    className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
                                 >
                                     Retry
                                 </button>
