@@ -1,6 +1,7 @@
-// frontend/components/ScenarioFilter.js - Fixed ScenarioFilter component
+// frontend/components/ScenarioFilter.js - Updated to use common components
 
 import React, { useState, useEffect } from 'react';
+import { Select, SearchInput, Button } from './common';
 
 const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
     const [category, setCategory] = useState('');
@@ -19,27 +20,25 @@ const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
         applyFilters();
     }, [category, difficulty, search]);
 
-    // Handle category change
-    const handleCategoryChange = (e) => {
-        setCategory(e.target.value);
-    };
-
-    // Handle difficulty change
-    const handleDifficultyChange = (e) => {
-        setDifficulty(e.target.value);
-    };
-
-    // Handle search input change with debounce
-    const handleSearchChange = (e) => {
-        setSearch(e.target.value);
-    };
-
     // Clear all filters
     const clearFilters = () => {
         setCategory('');
         setDifficulty('');
         setSearch('');
     };
+
+    // Create category options for Select
+    const categoryOptions = Object.entries(categories).map(([key, value]) => ({
+        value: key,
+        label: value
+    }));
+
+    // Create difficulty options
+    const difficultyOptions = [
+        { value: 'beginner', label: 'Beginner' },
+        { value: 'intermediate', label: 'Intermediate' },
+        { value: 'advanced', label: 'Advanced' }
+    ];
 
     return (
         <div className="bg-white shadow rounded-lg mb-6">
@@ -48,71 +47,41 @@ const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                     {/* Search input */}
-                    <div>
-                        <label htmlFor="search" className="block text-sm font-medium text-gray-700 mb-1">
-                            Search
-                        </label>
-                        <div className="relative rounded-md shadow-sm">
-                            <input
-                                type="text"
-                                id="search"
-                                className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                                placeholder="Search scenarios..."
-                                value={search}
-                                onChange={handleSearchChange}
-                            />
-                        </div>
-                    </div>
+                    <SearchInput
+                        value={search}
+                        onChange={setSearch}
+                        placeholder="Search scenarios..."
+                    />
 
                     {/* Category select */}
-                    <div>
-                        <label htmlFor="category" className="block text-sm font-medium text-gray-700 mb-1">
-                            Category
-                        </label>
-                        <select
-                            id="category"
-                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                            value={category}
-                            onChange={handleCategoryChange}
-                        >
-                            <option value="">All Categories</option>
-                            {Object.entries(categories).map(([key, value]) => (
-                                <option key={key} value={key}>
-                                    {value}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
+                    <Select
+                        value={category}
+                        onChange={setCategory}
+                        options={categoryOptions}
+                        label="Category"
+                        placeholder="All Categories"
+                    />
 
                     {/* Difficulty select */}
-                    <div>
-                        <label htmlFor="difficulty" className="block text-sm font-medium text-gray-700 mb-1">
-                            Difficulty
-                        </label>
-                        <select
-                            id="difficulty"
-                            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-                            value={difficulty}
-                            onChange={handleDifficultyChange}
-                        >
-                            <option value="">All Difficulties</option>
-                            <option value="beginner">Beginner</option>
-                            <option value="intermediate">Intermediate</option>
-                            <option value="advanced">Advanced</option>
-                        </select>
-                    </div>
+                    <Select
+                        value={difficulty}
+                        onChange={setDifficulty}
+                        options={difficultyOptions}
+                        label="Difficulty"
+                        placeholder="All Difficulties"
+                    />
                 </div>
 
                 {/* Clear filters button */}
                 {(category || difficulty || search) && (
                     <div className="mt-4 text-right">
-                        <button
-                            type="button"
+                        <Button
+                            variant="secondary"
+                            size="sm"
                             onClick={clearFilters}
-                            className="inline-flex items-center px-3 py-1.5 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
                         >
                             Clear Filters
-                        </button>
+                        </Button>
                     </div>
                 )}
             </div>

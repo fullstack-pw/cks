@@ -1,9 +1,10 @@
-// frontend/components/ScenarioList.js - Fixed ScenarioList component
+// frontend/components/ScenarioList.js - Updated to use common components
 
 import React, { useState } from 'react';
 import ScenarioCard from './ScenarioCard';
+import { LoadingState, EmptyState } from './common';
 
-const ScenarioList = ({ scenarios = [], categories = {}, onStartScenario }) => {
+const ScenarioList = ({ scenarios = [], categories = {}, onStartScenario, isLoading = false }) => {
     const [isCreatingSession, setIsCreatingSession] = useState(false);
 
     // Handle starting a scenario
@@ -20,11 +21,18 @@ const ScenarioList = ({ scenarios = [], categories = {}, onStartScenario }) => {
         }
     };
 
+    if (isLoading) {
+        return <LoadingState message="Loading scenarios..." />;
+    }
+
     if (!scenarios || scenarios.length === 0) {
         return (
-            <div className="bg-white shadow rounded-lg p-6 text-center">
-                <p className="text-gray-500">No scenarios found matching your filters</p>
-            </div>
+            <EmptyState
+                title="No scenarios found"
+                message="No scenarios match your current filters."
+                actionText="Clear Filters"
+                onAction={() => window.location.search = ''}
+            />
         );
     }
 

@@ -1,8 +1,7 @@
-// frontend/components/ScenarioCard.js (updated)
+// frontend/components/ScenarioCard.js - Updated to use common components
+
 import React from 'react';
-import Card from './common/Card';
-import Button from './common/Button';
-import StatusIndicator from './common/StatusIndicator';
+import { Card, Button, StatusIndicator } from './common';
 
 const ScenarioCard = ({ scenario, categoryLabels = {}, onStart, isCreatingSession }) => {
     if (!scenario) return null;
