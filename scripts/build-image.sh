@@ -9,6 +9,9 @@ OUTPUT_IMAGE="ubuntu-2204-k8s-golden-image.qcow2"
 BASE_IMAGE="ubuntu-22.04-server-cloudimg-amd64.img"
 TEMP_DIR=$(mktemp -d)
 MOUNT_DIR="${TEMP_DIR}/mnt"
+HTTP_SERVER_PORT=8000
+PVC_NAME="golden-image-${K8S_VERSION//./-}"
+NAMESPACE="vm-templates"
 
 echo "Creating golden VM image for Kubernetes ${K8S_VERSION}..."
 
@@ -73,44 +76,81 @@ virt-customize -a "${OUTPUT_IMAGE}" \
   --run-command "useradd suporte" \
   --run-command "mkdir -p /home/suporte/.kube" \
   --run-command "chown -R suporte:suporte /home/suporte/.kube" \
-  --run-command "crictl pull registry.k8s.io/pause:3.10" \
-  --run-command "crictl pull registry.k8s.io/kube-apiserver:v${K8S_VERSION}" \
-  --run-command "crictl pull registry.k8s.io/kube-controller-manager:v${K8S_VERSION}" \
-  --run-command "crictl pull registry.k8s.io/kube-scheduler:v${K8S_VERSION}" \
-  --run-command "crictl pull registry.k8s.io/kube-proxy:v${K8S_VERSION}" \
-  --run-command "crictl pull registry.k8s.io/coredns/coredns:v1.11.1" \
-  --run-command "crictl pull quay.io/cilium/cilium:v1.17.3" \
   --run-command "echo 'suporte ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/suporte" \
-  --ssh-inject suporte:file:/home/suporte/.ssh/id_ed25519.pub \
+  --ssh-inject suporte:file:/home/pedro/.ssh/id_ed25519.pub \
   --root-password password:suporte
 
 echo "Golden image created: ${OUTPUT_IMAGE}"
 
-# Import image to KubeVirt's storage (optional step)
-echo "Importing image to KubeVirt..."
-kubectl create -f - <<EOF
-apiVersion: v1
-kind: PersistentVolumeClaim
+# Get local IP address
+LOCAL_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -n 1)
+if [ -z "$LOCAL_IP" ]; then
+    echo "Error: Could not determine local IP address"
+    exit 1
+fi
+
+echo "Starting HTTP server to serve the image file..."
+# Start a temporary HTTP server in the background
+cd $(dirname "${OUTPUT_IMAGE}")
+python3 -m http.server $HTTP_SERVER_PORT &
+HTTP_SERVER_PID=$!
+
+# Make sure to kill the HTTP server when the script exits
+trap "kill $HTTP_SERVER_PID" EXIT
+
+echo "HTTP server started at http://$LOCAL_IP:$HTTP_SERVER_PORT"
+echo "Importing image to KubeVirt using DataVolume..."
+
+# Create a DataVolume that imports from the HTTP server
+cat <<EOF | kubectl apply -f -
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
 metadata:
-  name: golden-image-${K8S_VERSION//./-}
-  namespace: vm-templates
+  name: ${PVC_NAME}
+  namespace: ${NAMESPACE}
 spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 20Gi
-  storageClassName: local-path
+  pvc:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 20Gi
+    storageClassName: local-path
+  source:
+    http:
+      url: "http://${LOCAL_IP}:${HTTP_SERVER_PORT}/$(basename ${OUTPUT_IMAGE})"
+EOF
+echo "DataVolume created. Waiting for import to complete..."
+
+# Kickstart datavolume
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Pod
+metadata:
+  name: trigger-provisioning
+  namespace: ${NAMESPACE}
+spec:
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: ${PVC_NAME} 
+  containers:
+  - name: dummy
+    image: busybox
+    command: ["sleep", "30"]
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  restartPolicy: Never
 EOF
 
-kubectl virt-image-upload \
-  --pvc golden-image-${K8S_VERSION//./-} \
-  --namespace vm-templates \
-  --uploadproxy-url https://cdi-uploadproxy.cdi.svc.cluster.local \
-  --insecure \
-  --image-path ${OUTPUT_IMAGE}
+
+# Wait for DataVolume to complete
+kubectl wait datavolume/${PVC_NAME} --namespace=${NAMESPACE} --for=condition=Ready --timeout=30m
 
 echo "Import completed. Golden image ready for use."
 
 # Cleanup
+kill $HTTP_SERVER_PID
 rm -rf "${TEMP_DIR}"
+echo "Temporary HTTP server stopped."

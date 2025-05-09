@@ -69,4 +69,4 @@ spec:
   source:
     pvc:
       namespace: vm-templates
-      name: ubuntu-2204-base-image
+      name: golden-image-1-33-0
