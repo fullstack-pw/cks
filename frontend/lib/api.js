@@ -1,4 +1,6 @@
-// frontend/lib/api.js - Enhanced API client with consistent error handling
+// frontend/lib/api.js (enhanced version)
+
+import ErrorHandler from '../utils/errorHandler';
 
 // Use environment variable with fallback to localhost
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1';
@@ -41,6 +43,8 @@ class ApiClient {
             if (!response.ok) {
                 const error = new Error(`API request failed: ${response.status} ${response.statusText}`);
                 error.status = response.status;
+                error.url = url;
+                error.method = options.method || 'GET';
 
                 try {
                     error.info = await response.json();
@@ -48,8 +52,8 @@ class ApiClient {
                     error.info = { message: response.statusText };
                 }
 
-                console.error('API Error:', error);
-                throw error;
+                // Process through error handler
+                throw ErrorHandler.processApiError(error, `api:${url}`);
             }
 
             // Return null for 204 No Content
@@ -67,15 +71,23 @@ class ApiClient {
                 const timeoutError = new Error(`Request timed out after ${timeout}ms`);
                 timeoutError.status = 408; // Request Timeout
                 timeoutError.isTimeout = true;
-                throw timeoutError;
+                timeoutError.url = url;
+
+                // Process through error handler
+                throw ErrorHandler.processApiError(timeoutError, `api:${url}:timeout`);
+            }
+
+            // If error is already processed, rethrow it
+            if (error.hasBeenProcessed) {
+                throw error;
             }
 
             // Enhance error with more context
             error.endpoint = url;
             error.requestOptions = { ...options, body: options.body ? '[REDACTED]' : undefined };
 
-            console.error('Fetch Error:', error);
-            throw error;
+            // Process through error handler
+            throw ErrorHandler.processApiError(error, `api:${url}`);
         }
     }
 

@@ -1,10 +1,11 @@
-// frontend/contexts/SessionContext.js - Add toast notifications
+// frontend/contexts/SessionContext.js (enhanced error handling)
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { mutate } from 'swr';
 import { useToast } from './ToastContext';
 import api from '../lib/api';
+import ErrorHandler from '../utils/errorHandler';
 
 // Create context
 const SessionContext = createContext(null);
@@ -14,19 +15,26 @@ export const SessionProvider = ({ children }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const router = useRouter();
-    const toast = useToast(); // Add toast
+    const toast = useToast();
 
-    // Global fetcher function for SWR
+    // Global fetcher function for SWR with error handling
     const fetcher = async (url) => {
         try {
             return await api.sessions.get(url.split('/').pop());
         } catch (err) {
-            setError(err);
-            throw err;
+            // Use our error handler to process the error
+            const processedError = ErrorHandler.handleError(
+                err,
+                'session:fetch',
+                toast.error
+            );
+
+            setError(processedError);
+            throw processedError;
         }
     };
 
-    // Create a new session
+    // Create a new session with enhanced error handling
     const createSession = async (scenarioId) => {
         setLoading(true);
         setError(null);
@@ -39,15 +47,21 @@ export const SessionProvider = ({ children }) => {
             router.push(`/lab/${result.sessionId}`);
             return result;
         } catch (err) {
-            setError(err);
-            toast.error(`Failed to create session: ${err.message || 'Unknown error'}`);
-            throw err;
+            // Use our error handler to process the error
+            const processedError = ErrorHandler.handleError(
+                err,
+                'session:create',
+                toast.error
+            );
+
+            setError(processedError);
+            throw processedError;
         } finally {
             setLoading(false);
         }
     };
 
-    // Delete a session
+    // Delete a session with enhanced error handling
     const deleteSession = async (sessionId) => {
         setLoading(true);
         setError(null);
@@ -59,15 +73,21 @@ export const SessionProvider = ({ children }) => {
             toast.success('Session deleted successfully');
             router.push('/');
         } catch (err) {
-            setError(err);
-            toast.error(`Failed to delete session: ${err.message || 'Unknown error'}`);
-            throw err;
+            // Use our error handler to process the error
+            const processedError = ErrorHandler.handleError(
+                err,
+                'session:delete',
+                toast.error
+            );
+
+            setError(processedError);
+            throw processedError;
         } finally {
             setLoading(false);
         }
     };
 
-    // Extend a session
+    // Extend a session with enhanced error handling
     const extendSession = async (sessionId, minutes = 30) => {
         setLoading(true);
         setError(null);
@@ -79,15 +99,21 @@ export const SessionProvider = ({ children }) => {
             toast.success(`Session extended by ${minutes} minutes`);
             return true;
         } catch (err) {
-            setError(err);
-            toast.error(`Failed to extend session: ${err.message || 'Unknown error'}`);
-            throw err;
+            // Use our error handler to process the error
+            const processedError = ErrorHandler.handleError(
+                err,
+                'session:extend',
+                toast.error
+            );
+
+            setError(processedError);
+            throw processedError;
         } finally {
             setLoading(false);
         }
     };
 
-    // Validate a task
+    // Validate a task with enhanced error handling
     const validateTask = async (sessionId, taskId) => {
         setLoading(true);
         setError(null);
@@ -105,25 +131,42 @@ export const SessionProvider = ({ children }) => {
 
             return result;
         } catch (err) {
-            setError(err);
-            toast.error(`Validation error: ${err.message || 'Unknown error'}`);
-            throw err;
+            // Use our error handler to process the error
+            const processedError = ErrorHandler.handleError(
+                err,
+                'task:validate',
+                toast.error
+            );
+
+            setError(processedError);
+            throw processedError;
         } finally {
             setLoading(false);
         }
     };
 
-    // Create a terminal session
+    // Create a terminal session with enhanced error handling
     const createTerminal = async (sessionId, target) => {
         try {
             const result = await api.terminals.create(sessionId, target);
             toast.success(`Terminal created for ${target}`);
             return result;
         } catch (err) {
-            setError(err);
-            toast.error(`Failed to create terminal: ${err.message || 'Unknown error'}`);
-            throw err;
+            // Use our error handler to process the error
+            const processedError = ErrorHandler.handleError(
+                err,
+                'terminal:create',
+                toast.error
+            );
+
+            setError(processedError);
+            throw processedError;
         }
+    };
+
+    // Add a function to clear errors
+    const clearError = () => {
+        setError(null);
     };
 
     // The context value
@@ -138,6 +181,7 @@ export const SessionProvider = ({ children }) => {
         extendSession,
         validateTask,
         createTerminal,
+        clearError,
 
         // Helper for components to use SWR directly
         fetcher
