@@ -1,4 +1,4 @@
-// frontend/components/Layout.js - Main layout component for Next.js 13+
+// frontend/components/Layout.js
 
 import React from 'react';
 import Head from 'next/head';
@@ -16,19 +16,18 @@ const Layout = ({ children, title = 'cks CKS Practice', hideHeader = false }) =>
                     <title>{title}</title>
                     <meta name="description" content="Practice for CKS certification with interactive scenarios" />
                     <link rel="icon" href="/favicon.ico" />
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
                 </Head>
 
                 {!hideHeader && (
                     <header className="bg-white shadow">
                         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                            <div className="flex justify-between h-16">
-                                <div className="flex">
-                                    <div className="flex-shrink-0 flex items-center">
-                                        <Link href="/" className="text-2xl font-bold text-indigo-600">
-                                            cks
-                                        </Link>
-                                    </div>
-                                    <nav className="ml-6 flex space-x-8">
+                            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center py-3 sm:py-0">
+                                <div className="flex items-center">
+                                    <Link href="/" className="text-2xl font-bold text-indigo-600">
+                                        cks
+                                    </Link>
+                                    <nav className="ml-6 flex space-x-4 sm:space-x-8 mt-1">
                                         <Link
                                             href="/"
                                             className={`inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium ${router.pathname === '/'
@@ -49,7 +48,7 @@ const Layout = ({ children, title = 'cks CKS Practice', hideHeader = false }) =>
                                         </Link>
                                     </nav>
                                 </div>
-                                <div className="flex items-center">
+                                <div className="flex items-center mt-3 sm:mt-0">
                                     <a
                                         href="https://github.com/fullstack-pw/cks"
                                         target="_blank"
@@ -79,7 +78,7 @@ const Layout = ({ children, title = 'cks CKS Practice', hideHeader = false }) =>
                     </footer>
                 )}
             </div>
-        </ErrorBoundary>
+        </ErrorBoundary >
     );
 };
 

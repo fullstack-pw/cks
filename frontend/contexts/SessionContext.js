@@ -1,8 +1,9 @@
-// frontend/contexts/SessionContext.js - Updated version with SWR integration
+// frontend/contexts/SessionContext.js - Add toast notifications
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { mutate } from 'swr';
+import { useToast } from './ToastContext';
 import api from '../lib/api';
 
 // Create context
@@ -13,6 +14,7 @@ export const SessionProvider = ({ children }) => {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const router = useRouter();
+    const toast = useToast(); // Add toast
 
     // Global fetcher function for SWR
     const fetcher = async (url) => {
@@ -33,10 +35,12 @@ export const SessionProvider = ({ children }) => {
             const result = await api.sessions.create(scenarioId);
             // Prefetch the session data for SWR
             mutate(`/sessions/${result.sessionId}`, result, false);
+            toast.success('Lab session created successfully');
             router.push(`/lab/${result.sessionId}`);
             return result;
         } catch (err) {
             setError(err);
+            toast.error(`Failed to create session: ${err.message || 'Unknown error'}`);
             throw err;
         } finally {
             setLoading(false);
@@ -52,9 +56,11 @@ export const SessionProvider = ({ children }) => {
             await api.sessions.delete(sessionId);
             // Invalidate the cache for this session
             mutate(`/sessions/${sessionId}`, null, false);
+            toast.success('Session deleted successfully');
             router.push('/');
         } catch (err) {
             setError(err);
+            toast.error(`Failed to delete session: ${err.message || 'Unknown error'}`);
             throw err;
         } finally {
             setLoading(false);
@@ -70,9 +76,11 @@ export const SessionProvider = ({ children }) => {
             await api.sessions.extend(sessionId, minutes);
             // Revalidate to get updated session data
             mutate(`/sessions/${sessionId}`);
+            toast.success(`Session extended by ${minutes} minutes`);
             return true;
         } catch (err) {
             setError(err);
+            toast.error(`Failed to extend session: ${err.message || 'Unknown error'}`);
             throw err;
         } finally {
             setLoading(false);
@@ -88,9 +96,17 @@ export const SessionProvider = ({ children }) => {
             const result = await api.tasks.validate(sessionId, taskId);
             // Revalidate to get updated session data
             mutate(`/sessions/${sessionId}`);
+
+            if (result.success) {
+                toast.success('Task completed successfully!');
+            } else {
+                toast.warning('Task validation failed');
+            }
+
             return result;
         } catch (err) {
             setError(err);
+            toast.error(`Validation error: ${err.message || 'Unknown error'}`);
             throw err;
         } finally {
             setLoading(false);
@@ -100,9 +116,12 @@ export const SessionProvider = ({ children }) => {
     // Create a terminal session
     const createTerminal = async (sessionId, target) => {
         try {
-            return await api.terminals.create(sessionId, target);
+            const result = await api.terminals.create(sessionId, target);
+            toast.success(`Terminal created for ${target}`);
+            return result;
         } catch (err) {
             setError(err);
+            toast.error(`Failed to create terminal: ${err.message || 'Unknown error'}`);
             throw err;
         }
     };

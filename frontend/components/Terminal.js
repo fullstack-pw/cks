@@ -1,7 +1,7 @@
 // frontend/components/Terminal.js
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
-import 'xterm/css/xterm.css';
+import '@xterm/xterm/css/xterm.css';
 import { Button, StatusIndicator } from './common';
 
 // Dynamically import xterm with no SSR
@@ -289,12 +289,14 @@ const TerminalComponent = dynamic(
 
                         {/* Terminal toolbar */}
                         <div className="bg-gray-800 p-2 flex justify-between items-center">
-                            <div>
+                            <div className="flex">
                                 <Button
                                     variant="ghost"
                                     size="sm"
                                     onClick={() => setSearchVisible(!searchVisible)}
                                     title="Search"
+                                    className="mr-1"
+                                    aria-label="Search terminal"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -305,12 +307,19 @@ const TerminalComponent = dynamic(
                                     size="sm"
                                     onClick={() => terminal.current && terminal.current.clear()}
                                     title="Clear"
-                                    className="ml-2"
+                                    aria-label="Clear terminal"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                     </svg>
                                 </Button>
+                            </div>
+                            <div className="hidden xs:flex items-center">
+                                <StatusIndicator
+                                    status={connected ? 'connected' : 'disconnected'}
+                                    label={connected ? 'Connected' : 'Disconnected'}
+                                    size="sm"
+                                />
                             </div>
                             <div>
                                 <Button
@@ -319,7 +328,13 @@ const TerminalComponent = dynamic(
                                     onClick={connectWebSocket}
                                     disabled={connected}
                                 >
-                                    {connected ? 'Connected' : 'Reconnect'}
+                                    {connected ? (
+                                        <span className="hidden sm:inline">Connected</span>
+                                    ) : (
+                                        <span>
+                                            <span className="hidden sm:inline">Re</span>connect
+                                        </span>
+                                    )}
                                 </Button>
                             </div>
                         </div>

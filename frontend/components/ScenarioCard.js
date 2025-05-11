@@ -17,7 +17,7 @@ const ScenarioCard = ({ scenario, categoryLabels = {}, onStart, isCreatingSessio
     // Create card header with title and difficulty
     const header = (
         <div className="flex justify-between items-start">
-            <h3 className="text-lg font-semibold text-gray-900 truncate" title={title}>
+            <h3 className="text-base sm:text-lg font-semibold text-gray-900 truncate" title={title}>
                 {title}
             </h3>
             <StatusIndicator
@@ -48,11 +48,11 @@ const ScenarioCard = ({ scenario, categoryLabels = {}, onStart, isCreatingSessio
             className="h-full flex flex-col"
         >
             <div className="flex-1 flex flex-col">
-                <p className="text-gray-600 text-sm mb-4 line-clamp-2" title={description}>
+                <p className="text-gray-600 text-xs sm:text-sm mb-4 line-clamp-2" title={description}>
                     {description}
                 </p>
 
-                <div className="flex items-center text-gray-500 text-sm mb-4">
+                <div className="flex items-center text-gray-500 text-xs sm:text-sm mb-4">
                     <svg
                         className="w-4 h-4 mr-1"
                         fill="none"
@@ -70,16 +70,21 @@ const ScenarioCard = ({ scenario, categoryLabels = {}, onStart, isCreatingSessio
                     <span>{timeEstimate}</span>
                 </div>
 
-                <div className="flex flex-wrap gap-1 mt-auto">
-                    {topics.map(topic => (
+                <div className="flex flex-wrap gap-1 mt-auto overflow-hidden">
+                    {topics.slice(0, 3).map(topic => (
                         <span
                             key={topic}
-                            className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full"
+                            className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full truncate"
                             title={categoryLabels[topic] || topic}
                         >
                             {categoryLabels[topic] || topic}
                         </span>
                     ))}
+                    {topics.length > 3 && (
+                        <span className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full">
+                            +{topics.length - 3} more
+                        </span>
+                    )}
                 </div>
             </div>
         </Card>

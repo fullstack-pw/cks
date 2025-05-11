@@ -1,4 +1,5 @@
 // frontend/pages/lab/[id].js
+
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
@@ -13,6 +14,24 @@ export default function LabPage() {
     const { session, isLoading, isError, error, extendSession } = useSession(id);
     const [timeRemaining, setTimeRemaining] = useState(0);
     const [splitSize, setSplitSize] = useState(65);
+    const [isMobile, setIsMobile] = useState(false);
+    const [activePanel, setActivePanel] = useState('terminal'); // 'terminal' or 'tasks'
+
+    // Check if mobile on mount and when window resizes
+    useEffect(() => {
+        const checkMobile = () => {
+            setIsMobile(window.innerWidth < 768);
+        };
+
+        // Initial check
+        checkMobile();
+
+        // Add resize listener
+        window.addEventListener('resize', checkMobile);
+
+        // Cleanup
+        return () => window.removeEventListener('resize', checkMobile);
+    }, []);
 
     // Calculate time remaining
     useEffect(() => {
@@ -77,7 +96,7 @@ export default function LabPage() {
             <header className="bg-white border-b border-gray-200 px-4 py-2">
                 <div className="flex flex-col md:flex-row md:justify-between md:items-center">
                     <div>
-                        <h1 className="text-lg font-medium text-gray-900">
+                        <h1 className="text-lg font-medium text-gray-900 truncate">
                             {session.scenarioId ? `Lab: ${session.scenarioId}` : 'CKS Lab Environment'}
                         </h1>
                         <div className="flex items-center text-sm text-gray-500 mt-1">
@@ -107,15 +126,51 @@ export default function LabPage() {
                 </div>
             </header>
 
-            {/* Main content with resizable panels */}
+            {/* Mobile mode panel switcher */}
+            {isMobile && (
+                <div className="bg-gray-100 px-4 py-2 flex border-b">
+                    <Button
+                        variant={activePanel === 'terminal' ? 'primary' : 'secondary'}
+                        size="sm"
+                        onClick={() => setActivePanel('terminal')}
+                        className="flex-1 mr-2"
+                    >
+                        Terminal
+                    </Button>
+                    <Button
+                        variant={activePanel === 'tasks' ? 'primary' : 'secondary'}
+                        size="sm"
+                        onClick={() => setActivePanel('tasks')}
+                        className="flex-1"
+                    >
+                        Tasks
+                    </Button>
+                </div>
+            )}
+
+            {/* Main content */}
             <div className="flex-1 overflow-hidden">
-                <SplitPanel
-                    left={<TerminalContainer sessionId={id} />}
-                    right={<TaskPanel sessionId={id} scenarioId={session.scenarioId} />}
-                    direction="horizontal"
-                    defaultSplit={splitSize}
-                    onChange={setSplitSize}
-                />
+                {isMobile ? (
+                    // Mobile view - show active panel only
+                    activePanel === 'terminal' ? (
+                        <div className="h-full">
+                            <TerminalContainer sessionId={id} />
+                        </div>
+                    ) : (
+                        <div className="h-full overflow-auto">
+                            <TaskPanel sessionId={id} scenarioId={session.scenarioId} />
+                        </div>
+                    )
+                ) : (
+                    // Desktop view - split panel
+                    <SplitPanel
+                        left={<TerminalContainer sessionId={id} />}
+                        right={<TaskPanel sessionId={id} scenarioId={session.scenarioId} />}
+                        direction="horizontal"
+                        defaultSplit={splitSize}
+                        onChange={setSplitSize}
+                    />
+                )}
             </div>
         </div>
     );

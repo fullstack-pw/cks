@@ -7,6 +7,7 @@ const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
     const [difficulty, setDifficulty] = useState('');
     const [search, setSearch] = useState('');
     const [isFilterActive, setIsFilterActive] = useState(false);
+    const [filtersExpanded, setFiltersExpanded] = useState(false);
 
     // Apply filter changes
     const applyFilters = () => {
@@ -43,47 +44,63 @@ const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
 
     return (
         <Card className="mb-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Filter Scenarios</h3>
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-medium text-gray-900">Filter Scenarios</h3>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                {/* Search input */}
-                <SearchInput
-                    value={search}
-                    onChange={setSearch}
-                    placeholder="Search scenarios..."
-                />
-
-                {/* Category select */}
-                <Select
-                    value={category}
-                    onChange={setCategory}
-                    options={categoryOptions}
-                    label="Category"
-                    placeholder="All Categories"
-                />
-
-                {/* Difficulty select */}
-                <Select
-                    value={difficulty}
-                    onChange={setDifficulty}
-                    options={difficultyOptions}
-                    label="Difficulty"
-                    placeholder="All Difficulties"
-                />
-            </div>
-
-            {/* Clear filters button - only show if filters are active */}
-            {isFilterActive && (
-                <div className="mt-4 text-right">
+                {/* Mobile toggle button */}
+                <div className="md:hidden">
                     <Button
                         variant="secondary"
                         size="sm"
-                        onClick={clearFilters}
+                        onClick={() => setFiltersExpanded(!filtersExpanded)}
                     >
-                        Clear Filters
+                        {filtersExpanded ? 'Hide Filters' : 'Show Filters'}
                     </Button>
                 </div>
-            )}
+            </div>
+
+            {/* Always visible on desktop, toggle on mobile */}
+            <div className={`${filtersExpanded || 'hidden md:block'}`}>
+                <div className="space-y-4 md:space-y-0 md:grid md:grid-cols-3 md:gap-4">
+                    {/* Search input */}
+                    <SearchInput
+                        value={search}
+                        onChange={setSearch}
+                        placeholder="Search scenarios..."
+                    />
+
+                    {/* Category select */}
+                    <Select
+                        value={category}
+                        onChange={setCategory}
+                        options={categoryOptions}
+                        label="Category"
+                        placeholder="All Categories"
+                    />
+
+                    {/* Difficulty select */}
+                    <Select
+                        value={difficulty}
+                        onChange={setDifficulty}
+                        options={difficultyOptions}
+                        label="Difficulty"
+                        placeholder="All Difficulties"
+                    />
+                </div>
+
+                {/* Clear filters button - only show if filters are active */}
+                {isFilterActive && (
+                    <div className="mt-4 text-right">
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={clearFilters}
+                        >
+                            Clear Filters
+                        </Button>
+                    </div>
+                )}
+            </div>
         </Card>
     );
 };

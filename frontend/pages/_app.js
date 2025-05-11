@@ -1,7 +1,9 @@
-// frontend/pages/_app.js - Next.js App component
+// frontend/pages/_app.js
 
+import React from 'react';
 import '../styles/globals.css';
 import { SessionProvider } from '../contexts/SessionContext';
+import { ToastProvider } from '../contexts/ToastContext';
 import Layout from '../components/Layout';
 
 function MyApp({ Component, pageProps }) {
@@ -12,11 +14,13 @@ function MyApp({ Component, pageProps }) {
     const getLayout = Component.getLayout || ((page) => page);
 
     return (
-        <SessionProvider>
-            <Layout hideHeader={hideHeader}>
-                {getLayout(<Component {...pageProps} />)}
-            </Layout>
-        </SessionProvider>
+        <ToastProvider>
+            <SessionProvider>
+                <Layout hideHeader={hideHeader}>
+                    {getLayout(<Component {...pageProps} />)}
+                </Layout>
+            </SessionProvider>
+        </ToastProvider>
     );
 }
 
