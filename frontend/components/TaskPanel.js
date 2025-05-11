@@ -1,8 +1,8 @@
-// frontend/components/TaskPanel.js - Updated to use new hook
-
+// frontend/components/TaskPanel.js
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
+import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
 
 const TaskPanel = ({ sessionId, scenarioId }) => {
     const { session, validateTask } = useSession(sessionId);
@@ -23,13 +23,14 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 setLoading(true);
                 const response = await fetch(`/api/v1/scenarios/${scenarioId}`);
                 if (!response.ok) {
-                    throw new Error('Failed to fetch scenario');
+                    throw new Error(`Failed to fetch scenario: ${response.status}`);
                 }
                 const data = await response.json();
                 setScenario(data);
                 setError(null);
             } catch (err) {
-                setError(err.message);
+                setError(err.message || 'Failed to load scenario details');
+                console.error('Error fetching scenario:', err);
             } finally {
                 setLoading(false);
             }
@@ -50,8 +51,9 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         } catch (err) {
             setValidationResult({
                 success: false,
-                message: err.message || 'Validation failed'
+                message: err.message || 'Validation failed due to an unexpected error'
             });
+            console.error('Task validation error:', err);
         } finally {
             setValidating(false);
         }
@@ -74,26 +76,16 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     };
 
     if (loading) {
-        return (
-            <div className="flex items-center justify-center h-full">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500"></div>
-            </div>
-        );
+        return <LoadingState message="Loading scenario details..." />;
     }
 
     if (error) {
         return (
-            <div className="p-4">
-                <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-md">
-                    <p>{error}</p>
-                    <button
-                        onClick={() => window.location.reload()}
-                        className="mt-2 text-sm text-red-600 underline"
-                    >
-                        Retry
-                    </button>
-                </div>
-            </div>
+            <ErrorState
+                message="Failed to load scenario"
+                details={error}
+                onRetry={() => window.location.reload()}
+            />
         );
     }
 
@@ -129,23 +121,17 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                                 key={task.id}
                                 onClick={() => setActiveTaskIndex(index)}
                                 className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap ${activeTaskIndex === index
-                                    ? 'border-indigo-500 text-indigo-600'
-                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                                    } ${status === 'completed' ? 'text-green-600' :
-                                        status === 'failed' ? 'text-red-600' : ''
+                                        ? 'border-indigo-500 text-indigo-600'
+                                        : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                                     }`}
                             >
-                                {status === 'completed' && (
-                                    <svg className="inline-block h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                    </svg>
-                                )}
-                                {status === 'failed' && (
-                                    <svg className="inline-block h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                    </svg>
-                                )}
-                                Task {index + 1}
+                                <div className="flex items-center">
+                                    <StatusIndicator
+                                        status={status}
+                                        size="sm"
+                                    />
+                                    <span className="ml-2">Task {index + 1}</span>
+                                </div>
                             </button>
                         );
                     })}
@@ -157,34 +143,32 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 <div className="p-6">
                     <div className="flex justify-between items-start mb-4">
                         <h2 className="text-xl font-medium text-gray-900">{currentTask.title}</h2>
-                        {getTaskStatus(currentTask.id) === 'completed' && (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                                Completed
-                            </span>
-                        )}
-                        {getTaskStatus(currentTask.id) === 'failed' && (
-                            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
-                                Failed
-                            </span>
-                        )}
+                        <StatusIndicator
+                            status={getTaskStatus(currentTask.id)}
+                            label={getTaskStatus(currentTask.id) === 'completed' ? 'Completed' :
+                                getTaskStatus(currentTask.id) === 'failed' ? 'Failed' : 'Pending'}
+                        />
                     </div>
 
-                    <div className="prose prose-indigo max-w-none mb-6">
-                        <ReactMarkdown>{currentTask.description}</ReactMarkdown>
-                    </div>
+                    <Card className="mb-6">
+                        <div className="prose prose-indigo max-w-none">
+                            <ReactMarkdown>{currentTask.description}</ReactMarkdown>
+                        </div>
+                    </Card>
 
                     {/* Hints */}
                     {currentTask.hints && currentTask.hints.length > 0 && (
                         <div className="mb-6">
-                            <button
+                            <Button
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => toggleHint(currentTask.id)}
-                                className="text-sm text-indigo-600 hover:text-indigo-800 focus:outline-none focus:underline"
                             >
                                 {showHints[currentTask.id] ? 'Hide Hints' : 'Show Hints'}
-                            </button>
+                            </Button>
 
                             {showHints[currentTask.id] && (
-                                <div className="mt-2 bg-indigo-50 p-4 rounded-md">
+                                <Card className="mt-2 bg-indigo-50">
                                     <h3 className="text-sm font-medium text-indigo-800 mb-2">Hints</h3>
                                     <ul className="list-disc pl-5 space-y-1">
                                         {currentTask.hints.map((hint, index) => (
@@ -193,23 +177,20 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                                             </li>
                                         ))}
                                     </ul>
-                                </div>
+                                </Card>
                             )}
                         </div>
                     )}
 
                     {/* Validation results */}
                     {validationResult && (
-                        <div className={`mb-6 p-4 rounded-md ${validationResult.success
-                            ? 'bg-green-50 border border-green-200'
-                            : 'bg-red-50 border border-red-200'
-                            }`}>
-                            <h3 className={`text-sm font-medium mb-2 ${validationResult.success ? 'text-green-800' : 'text-red-800'
-                                }`}>
+                        <Card
+                            className={`mb-6 ${validationResult.success ? 'bg-green-50' : 'bg-red-50'}`}
+                        >
+                            <h3 className={`text-sm font-medium mb-2 ${validationResult.success ? 'text-green-800' : 'text-red-800'}`}>
                                 {validationResult.success ? 'Task Completed!' : 'Validation Failed'}
                             </h3>
-                            <p className={`text-sm ${validationResult.success ? 'text-green-700' : 'text-red-700'
-                                }`}>
+                            <p className={`text-sm ${validationResult.success ? 'text-green-700' : 'text-red-700'}`}>
                                 {validationResult.message}
                             </p>
 
@@ -218,35 +199,30 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                                     <h4 className="text-xs font-medium text-gray-500 mb-1">Details</h4>
                                     <ul className="space-y-1">
                                         {validationResult.details.map((detail, index) => (
-                                            <li key={index} className={`text-sm flex items-start ${detail.passed ? 'text-green-700' : 'text-red-700'
-                                                }`}>
-                                                <span className="mr-1">{detail.passed ? '✓' : '✗'}</span>
-                                                <span>{detail.message}</span>
+                                            <li key={index} className={`text-sm flex items-start ${detail.passed ? 'text-green-700' : 'text-red-700'}`}>
+                                                <StatusIndicator
+                                                    status={detail.passed ? 'completed' : 'failed'}
+                                                    size="sm"
+                                                />
+                                                <span className="ml-2">{detail.message}</span>
                                             </li>
                                         ))}
                                     </ul>
                                 </div>
                             )}
-                        </div>
+                        </Card>
                     )}
 
                     {/* Validation button */}
                     <div className="pt-4">
-                        <button
+                        <Button
+                            variant="primary"
                             onClick={() => handleValidateTask(currentTask.id)}
+                            isLoading={validating}
                             disabled={validating}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {validating ? (
-                                <>
-                                    <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                    </svg>
-                                    Validating...
-                                </>
-                            ) : 'Validate Task'}
-                        </button>
+                            Validate Task
+                        </Button>
                     </div>
                 </div>
             </div>

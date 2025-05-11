@@ -1,8 +1,7 @@
-// frontend/components/ScenarioList.js - Updated to use common components
-
+// frontend/components/ScenarioList.js
 import React, { useState } from 'react';
 import ScenarioCard from './ScenarioCard';
-import { LoadingState, EmptyState } from './common';
+import { LoadingState, EmptyState, Card } from './common';
 
 const ScenarioList = ({ scenarios = [], categories = {}, onStartScenario, isLoading = false }) => {
     const [isCreatingSession, setIsCreatingSession] = useState(false);
@@ -27,17 +26,19 @@ const ScenarioList = ({ scenarios = [], categories = {}, onStartScenario, isLoad
 
     if (!scenarios || scenarios.length === 0) {
         return (
-            <EmptyState
-                title="No scenarios found"
-                message="No scenarios match your current filters."
-                actionText="Clear Filters"
-                onAction={() => window.location.search = ''}
-            />
+            <Card className="p-8 text-center">
+                <EmptyState
+                    title="No scenarios found"
+                    message="No scenarios match your current filters."
+                    actionText="Clear Filters"
+                    onAction={() => window.location.search = ''}
+                />
+            </Card>
         );
     }
 
     return (
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
             {scenarios.map((scenario) => (
                 <ScenarioCard
                     key={scenario.id}

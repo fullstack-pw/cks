@@ -1,17 +1,12 @@
-// frontend/pages/lab/[id].js (partial update)
+// frontend/pages/lab/[id].js
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import TerminalContainer from '../../components/TerminalContainer';
 import TaskPanel from '../../components/TaskPanel';
 import { useSession } from '../../hooks/useSession';
-import SplitPanel from '../../components/common/SplitPanel';
-import Button from '../../components/common/Button';
-import LoadingState from '../../components/common/LoadingState';
-import ErrorState from '../../components/common/ErrorState';
-import StatusIndicator from '../../components/common/StatusIndicator';
+import { SplitPanel, Button, LoadingState, ErrorState, StatusIndicator } from '../../components/common';
 
-// Existing component with shared UI components
 export default function LabPage() {
     const router = useRouter();
     const { id } = router.query;
@@ -75,20 +70,22 @@ export default function LabPage() {
     return (
         <div className="h-screen flex flex-col">
             <Head>
-                <title>Lab Environment | cks CKS</title>
+                <title>Lab Environment | CKS Practice</title>
             </Head>
 
             {/* Header with session info */}
             <header className="bg-white border-b border-gray-200 px-4 py-2">
-                <div className="flex justify-between items-center">
+                <div className="flex flex-col md:flex-row md:justify-between md:items-center">
                     <div>
-                        <h1 className="text-lg font-medium text-gray-900">CKS Lab Environment</h1>
+                        <h1 className="text-lg font-medium text-gray-900">
+                            {session.scenarioId ? `Lab: ${session.scenarioId}` : 'CKS Lab Environment'}
+                        </h1>
                         <div className="flex items-center text-sm text-gray-500 mt-1">
                             <span className="mr-2">Session: {id}</span>
                             <StatusIndicator status={session.status} size="sm" />
                         </div>
                     </div>
-                    <div className="flex items-center space-x-4">
+                    <div className="flex flex-wrap items-center space-x-2 md:space-x-4 mt-2 md:mt-0">
                         <div className={`text-sm ${timeRemaining < 10 ? 'text-red-600' : 'text-gray-600'}`}>
                             <span className="font-medium">{timeRemaining}</span> minutes remaining
                         </div>

@@ -1,8 +1,8 @@
-// frontend/components/TerminalContainer.js - Updated implementation
-
+// frontend/components/TerminalContainer.js
 import React, { useState, useEffect, useCallback } from 'react';
 import Terminal from './Terminal';
 import api from '../lib/api';
+import { Button, LoadingState, ErrorState, StatusIndicator } from './common';
 
 /**
  * Container component for terminals that manages tabs and terminal sessions
@@ -146,30 +146,30 @@ const TerminalContainer = ({ sessionId }) => {
     return (
         <div className="h-full flex flex-col">
             {/* Terminal tabs */}
-            <div className="bg-gray-800 px-4 py-2 text-white flex">
-                <button
+            <div className="bg-gray-800 px-4 py-2 text-white flex overflow-x-auto">
+                <Button
+                    variant={activeTab === 'control-plane' ? 'primary' : 'secondary'}
                     onClick={() => handleTabChange('control-plane')}
                     disabled={!sessionStatus.isReady}
-                    className={`px-3 py-1 rounded flex items-center ${activeTab === 'control-plane' ? 'bg-gray-700' : 'hover:bg-gray-700'
-                        } ${!sessionStatus.isReady ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    className={`mr-2 flex items-center ${!sessionStatus.isReady ? 'opacity-50' : ''}`}
                 >
                     Control Plane
                     {terminalSessions['control-plane'].connected && (
-                        <span className="ml-2 inline-block w-2 h-2 bg-green-500 rounded-full"></span>
+                        <StatusIndicator status="connected" size="sm" className="ml-2" />
                     )}
-                </button>
+                </Button>
 
-                <button
+                <Button
+                    variant={activeTab === 'worker-node' ? 'primary' : 'secondary'}
                     onClick={() => handleTabChange('worker-node')}
                     disabled={!sessionStatus.isReady}
-                    className={`px-3 py-1 rounded ml-2 flex items-center ${activeTab === 'worker-node' ? 'bg-gray-700' : 'hover:bg-gray-700'
-                        } ${!sessionStatus.isReady ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    className={`flex items-center ${!sessionStatus.isReady ? 'opacity-50' : ''}`}
                 >
                     Worker Node
                     {terminalSessions['worker-node'].connected && (
-                        <span className="ml-2 inline-block w-2 h-2 bg-green-500 rounded-full"></span>
+                        <StatusIndicator status="connected" size="sm" className="ml-2" />
                     )}
-                </button>
+                </Button>
             </div>
 
             {/* Terminal content area */}
@@ -177,34 +177,24 @@ const TerminalContainer = ({ sessionId }) => {
                 {/* Session not ready state */}
                 {!sessionStatus.isReady && (
                     <div className="flex flex-col justify-center items-center h-full bg-gray-800 text-white p-4">
-                        {sessionStatus.isLoading && (
-                            <div className="animate-pulse mb-4">
-                                <svg className="animate-spin h-8 w-8 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                            </div>
-                        )}
+                        {sessionStatus.isLoading ? (
+                            <LoadingState message={sessionStatus.message} size="md" />
+                        ) : (
+                            <>
+                                <p className="text-center mb-2">{sessionStatus.message}</p>
 
-                        <p className="text-center mb-2">{sessionStatus.message}</p>
-
-                        {sessionStatus.error && (
-                            <div className="mt-4 bg-red-800 bg-opacity-50 p-3 rounded text-white max-w-md text-center">
-                                <p className="font-medium">Error</p>
-                                <p className="text-sm">{sessionStatus.error}</p>
-                                <button
-                                    onClick={() => window.location.reload()}
-                                    className="mt-3 bg-red-700 hover:bg-red-600 text-white px-4 py-1 rounded text-sm"
-                                >
-                                    Reload
-                                </button>
-                            </div>
-                        )}
-
-                        {!sessionStatus.error && (
-                            <p className="text-center text-sm mt-2 text-gray-400">
-                                VMs typically take about 5 minutes to initialize.
-                            </p>
+                                {sessionStatus.error ? (
+                                    <ErrorState
+                                        message="Failed to prepare environment"
+                                        details={sessionStatus.error}
+                                        onRetry={() => window.location.reload()}
+                                    />
+                                ) : (
+                                    <p className="text-center text-sm mt-2 text-gray-400">
+                                        VMs typically take about 5 minutes to initialize.
+                                    </p>
+                                )}
+                            </>
                         )}
                     </div>
                 )}
@@ -222,27 +212,20 @@ const TerminalContainer = ({ sessionId }) => {
                             ) : (
                                 <div className="flex flex-col justify-center items-center h-full bg-gray-800 text-white p-4">
                                     {terminalSessions['control-plane'].isLoading ? (
-                                        <div className="flex flex-col items-center">
-                                            <div className="animate-spin h-8 w-8 border-2 border-white rounded-full border-t-transparent mb-3"></div>
-                                            <span>Creating terminal session...</span>
-                                        </div>
+                                        <LoadingState message="Creating terminal session..." size="md" />
                                     ) : terminalSessions['control-plane'].error ? (
-                                        <div className="text-center">
-                                            <p className="text-red-400 mb-3">Error: {terminalSessions['control-plane'].error}</p>
-                                            <button
-                                                onClick={() => createTerminalSession('control-plane')}
-                                                className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                                            >
-                                                Retry
-                                            </button>
-                                        </div>
+                                        <ErrorState
+                                            message="Failed to create terminal"
+                                            details={terminalSessions['control-plane'].error}
+                                            onRetry={() => createTerminalSession('control-plane')}
+                                        />
                                     ) : (
-                                        <button
+                                        <Button
+                                            variant="primary"
                                             onClick={() => createTerminalSession('control-plane')}
-                                            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
                                         >
                                             Connect to Control Plane
-                                        </button>
+                                        </Button>
                                     )}
                                 </div>
                             )}
@@ -258,27 +241,20 @@ const TerminalContainer = ({ sessionId }) => {
                             ) : (
                                 <div className="flex flex-col justify-center items-center h-full bg-gray-800 text-white p-4">
                                     {terminalSessions['worker-node'].isLoading ? (
-                                        <div className="flex flex-col items-center">
-                                            <div className="animate-spin h-8 w-8 border-2 border-white rounded-full border-t-transparent mb-3"></div>
-                                            <span>Creating terminal session...</span>
-                                        </div>
+                                        <LoadingState message="Creating terminal session..." size="md" />
                                     ) : terminalSessions['worker-node'].error ? (
-                                        <div className="text-center">
-                                            <p className="text-red-400 mb-3">Error: {terminalSessions['worker-node'].error}</p>
-                                            <button
-                                                onClick={() => createTerminalSession('worker-node')}
-                                                className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                                            >
-                                                Retry
-                                            </button>
-                                        </div>
+                                        <ErrorState
+                                            message="Failed to create terminal"
+                                            details={terminalSessions['worker-node'].error}
+                                            onRetry={() => createTerminalSession('worker-node')}
+                                        />
                                     ) : (
-                                        <button
+                                        <Button
+                                            variant="primary"
                                             onClick={() => createTerminalSession('worker-node')}
-                                            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
                                         >
                                             Connect to Worker Node
-                                        </button>
+                                        </Button>
                                     )}
                                 </div>
                             )}

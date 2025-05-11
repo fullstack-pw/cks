@@ -1,12 +1,12 @@
-// frontend/components/ScenarioFilter.js - Updated to use common components
-
+// frontend/components/ScenarioFilter.js
 import React, { useState, useEffect } from 'react';
-import { Select, SearchInput, Button } from './common';
+import { Card, Select, SearchInput, Button } from './common';
 
 const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
     const [category, setCategory] = useState('');
     const [difficulty, setDifficulty] = useState('');
     const [search, setSearch] = useState('');
+    const [isFilterActive, setIsFilterActive] = useState(false);
 
     // Apply filter changes
     const applyFilters = () => {
@@ -15,8 +15,9 @@ const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
         }
     };
 
-    // Apply filters whenever filter values change
+    // Check if any filter is active
     useEffect(() => {
+        setIsFilterActive(category || difficulty || search);
         applyFilters();
     }, [category, difficulty, search]);
 
@@ -41,51 +42,49 @@ const ScenarioFilter = ({ categories = {}, onFilterChange }) => {
     ];
 
     return (
-        <div className="bg-white shadow rounded-lg mb-6">
-            <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">Filter Scenarios</h3>
+        <Card className="mb-6">
+            <h3 className="text-lg font-medium text-gray-900 mb-4">Filter Scenarios</h3>
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-                    {/* Search input */}
-                    <SearchInput
-                        value={search}
-                        onChange={setSearch}
-                        placeholder="Search scenarios..."
-                    />
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {/* Search input */}
+                <SearchInput
+                    value={search}
+                    onChange={setSearch}
+                    placeholder="Search scenarios..."
+                />
 
-                    {/* Category select */}
-                    <Select
-                        value={category}
-                        onChange={setCategory}
-                        options={categoryOptions}
-                        label="Category"
-                        placeholder="All Categories"
-                    />
+                {/* Category select */}
+                <Select
+                    value={category}
+                    onChange={setCategory}
+                    options={categoryOptions}
+                    label="Category"
+                    placeholder="All Categories"
+                />
 
-                    {/* Difficulty select */}
-                    <Select
-                        value={difficulty}
-                        onChange={setDifficulty}
-                        options={difficultyOptions}
-                        label="Difficulty"
-                        placeholder="All Difficulties"
-                    />
-                </div>
-
-                {/* Clear filters button */}
-                {(category || difficulty || search) && (
-                    <div className="mt-4 text-right">
-                        <Button
-                            variant="secondary"
-                            size="sm"
-                            onClick={clearFilters}
-                        >
-                            Clear Filters
-                        </Button>
-                    </div>
-                )}
+                {/* Difficulty select */}
+                <Select
+                    value={difficulty}
+                    onChange={setDifficulty}
+                    options={difficultyOptions}
+                    label="Difficulty"
+                    placeholder="All Difficulties"
+                />
             </div>
-        </div>
+
+            {/* Clear filters button - only show if filters are active */}
+            {isFilterActive && (
+                <div className="mt-4 text-right">
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={clearFilters}
+                    >
+                        Clear Filters
+                    </Button>
+                </div>
+            )}
+        </Card>
     );
 };
 

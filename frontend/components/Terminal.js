@@ -1,8 +1,8 @@
-// frontend/components/Terminal.js - Consolidated implementation
-
+// frontend/components/Terminal.js
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import 'xterm/css/xterm.css';
+import { Button, StatusIndicator } from './common';
 
 // Dynamically import xterm with no SSR
 const TerminalComponent = dynamic(
@@ -244,9 +244,12 @@ const TerminalComponent = dynamic(
                 return (
                     <div className="h-full w-full flex flex-col">
                         {/* Connection indicator */}
-                        <div className={`absolute top-2 right-2 z-10 flex items-center ${connected ? 'text-green-500' : 'text-red-500'} text-xs font-medium bg-gray-900 bg-opacity-75 px-2 py-1 rounded`}>
-                            <span className={`inline-block w-2 h-2 rounded-full mr-1 ${connected ? 'bg-green-500' : 'bg-red-500'}`}></span>
-                            {connected ? 'Connected' : 'Disconnected'}
+                        <div className="absolute top-2 right-2 z-10 flex items-center bg-gray-900 bg-opacity-75 px-2 py-1 rounded">
+                            <StatusIndicator
+                                status={connected ? 'connected' : 'disconnected'}
+                                label={connected ? 'Connected' : 'Disconnected'}
+                                size="sm"
+                            />
                         </div>
 
                         {/* Search bar */}
@@ -260,18 +263,22 @@ const TerminalComponent = dynamic(
                                     className="flex-1 px-3 py-1 text-sm text-white bg-gray-700 border border-gray-600 rounded-l"
                                     onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
                                 />
-                                <button
+                                <Button
+                                    variant="primary"
+                                    size="sm"
                                     onClick={handleSearch}
-                                    className="px-3 py-1 text-sm bg-blue-600 text-white rounded-r hover:bg-blue-700"
+                                    className="rounded-l-none"
                                 >
                                     Find
-                                </button>
-                                <button
+                                </Button>
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
                                     onClick={() => setSearchVisible(false)}
-                                    className="ml-2 px-2 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
+                                    className="ml-2"
                                 >
                                     Close
-                                </button>
+                                </Button>
                             </div>
                         )}
 
@@ -283,34 +290,37 @@ const TerminalComponent = dynamic(
                         {/* Terminal toolbar */}
                         <div className="bg-gray-800 p-2 flex justify-between items-center">
                             <div>
-                                <button
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
                                     onClick={() => setSearchVisible(!searchVisible)}
-                                    className="px-2 py-1 text-xs bg-gray-700 text-white rounded hover:bg-gray-600"
                                     title="Search"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                                     </svg>
-                                </button>
-                                <button
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
                                     onClick={() => terminal.current && terminal.current.clear()}
-                                    className="ml-2 px-2 py-1 text-xs bg-gray-700 text-white rounded hover:bg-gray-600"
                                     title="Clear"
+                                    className="ml-2"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                                     </svg>
-                                </button>
+                                </Button>
                             </div>
                             <div>
-                                <button
+                                <Button
+                                    variant={connected ? 'ghost' : 'primary'}
+                                    size="sm"
                                     onClick={connectWebSocket}
                                     disabled={connected}
-                                    className={`px-2 py-1 text-xs ${connected ? 'bg-green-600' : 'bg-red-600 hover:bg-red-700'} text-white rounded ${connected ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                    title={connected ? 'Connected' : 'Reconnect'}
                                 >
                                     {connected ? 'Connected' : 'Reconnect'}
-                                </button>
+                                </Button>
                             </div>
                         </div>
                     </div>
@@ -340,21 +350,11 @@ const TerminalComponent = dynamic(
  * @param {Function} props.onConnectionChange - Callback for terminal connection status changes
  */
 const Terminal = ({ terminalId, onConnectionChange }) => {
-    const [isConnected, setIsConnected] = useState(false);
-
-    // Handle connection status changes
-    const handleConnectionChange = (connected) => {
-        setIsConnected(connected);
-        if (onConnectionChange) {
-            onConnectionChange(connected);
-        }
-    };
-
     return (
         <div className="h-full w-full flex flex-col relative">
             <TerminalComponent
                 terminalId={terminalId}
-                onConnectionChange={handleConnectionChange}
+                onConnectionChange={onConnectionChange}
             />
         </div>
     );

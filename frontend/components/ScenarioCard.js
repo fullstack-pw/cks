@@ -1,5 +1,4 @@
-// frontend/components/ScenarioCard.js - Updated to use common components
-
+// frontend/components/ScenarioCard.js
 import React from 'react';
 import { Card, Button, StatusIndicator } from './common';
 
@@ -8,18 +7,24 @@ const ScenarioCard = ({ scenario, categoryLabels = {}, onStart, isCreatingSessio
 
     const { id, title, description, difficulty, timeEstimate, topics = [] } = scenario;
 
+    // Map difficulty to status for visual indicator
+    const difficultyStatus = {
+        'beginner': 'connected', // green
+        'intermediate': 'pending', // yellow
+        'advanced': 'failed' // red
+    };
+
     // Create card header with title and difficulty
     const header = (
         <div className="flex justify-between items-start">
-            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-            <div className="ml-2">
-                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${difficulty === 'beginner' ? 'bg-green-100 text-green-800' :
-                        difficulty === 'intermediate' ? 'bg-yellow-100 text-yellow-800' :
-                            'bg-red-100 text-red-800'
-                    }`}>
-                    {difficulty}
-                </span>
-            </div>
+            <h3 className="text-lg font-semibold text-gray-900 truncate" title={title}>
+                {title}
+            </h3>
+            <StatusIndicator
+                status={difficultyStatus[difficulty] || 'pending'}
+                label={difficulty}
+                size="sm"
+            />
         </div>
     );
 
@@ -37,36 +42,45 @@ const ScenarioCard = ({ scenario, categoryLabels = {}, onStart, isCreatingSessio
     );
 
     return (
-        <Card header={header} footer={footer}>
-            <p className="text-gray-600 text-sm mb-4 line-clamp-2">{description}</p>
+        <Card
+            header={header}
+            footer={footer}
+            className="h-full flex flex-col"
+        >
+            <div className="flex-1 flex flex-col">
+                <p className="text-gray-600 text-sm mb-4 line-clamp-2" title={description}>
+                    {description}
+                </p>
 
-            <div className="flex items-center text-gray-500 text-xs mb-4">
-                <svg
-                    className="w-4 h-4 mr-1"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
-                    <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-                    />
-                </svg>
-                <span>{timeEstimate}</span>
-            </div>
-
-            <div className="flex flex-wrap gap-1 mb-4">
-                {topics.map(topic => (
-                    <span
-                        key={topic}
-                        className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full"
+                <div className="flex items-center text-gray-500 text-sm mb-4">
+                    <svg
+                        className="w-4 h-4 mr-1"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        xmlns="http://www.w3.org/2000/svg"
                     >
-                        {categoryLabels[topic] || topic}
-                    </span>
-                ))}
+                        <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                    </svg>
+                    <span>{timeEstimate}</span>
+                </div>
+
+                <div className="flex flex-wrap gap-1 mt-auto">
+                    {topics.map(topic => (
+                        <span
+                            key={topic}
+                            className="bg-gray-100 text-gray-600 text-xs px-2 py-1 rounded-full"
+                            title={categoryLabels[topic] || topic}
+                        >
+                            {categoryLabels[topic] || topic}
+                        </span>
+                    ))}
+                </div>
             </div>
         </Card>
     );
