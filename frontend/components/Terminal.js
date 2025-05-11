@@ -9,10 +9,10 @@ const TerminalComponent = dynamic(
     () => {
         // Import dependencies only on client side
         return Promise.all([
-            import('xterm'),
-            import('xterm-addon-fit'),
-            import('xterm-addon-web-links'),
-            import('xterm-addon-search')
+            import('@xterm/xterm'),
+            import('@xterm/addon-fit'),
+            import('@xterm/addon-web-links'),
+            import('@xterm/addon-search')
         ]).then(([xtermModule, fitAddonModule, webLinksAddonModule, searchAddonModule]) => {
             const Terminal = xtermModule.Terminal;
             const FitAddon = fitAddonModule.FitAddon;
