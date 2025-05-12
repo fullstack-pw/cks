@@ -364,7 +364,7 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 			fmt.Sprintf("vmi/%s", actualVMName),
 			"-n", namespace,
 			"-l", "suporte",
-			"--local-ssh-opts=-o StrictHostKeyChecking=no",
+			"--local-ssh-opts", "-o StrictHostKeyChecking=no",
 			"--command=cat /etc/kubeadm-join-command",
 		)
 
@@ -545,24 +545,6 @@ func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...str
 	return nil
 }
 
-// GetVMStatus gets the status of a VM
-func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (string, error) {
-	vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
-	if err != nil {
-		return "", err
-	}
-
-	if vm.Status.Ready {
-		return "Running", nil
-	}
-
-	if vm.Status.Created {
-		return "Starting", nil
-	}
-
-	return "Pending", nil
-}
-
 // ExecuteCommandInVM executes a command in a VM
 func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string) (string, error) {
 	pod, err := c.GetVMPodName(ctx, namespace, vmName)
@@ -685,4 +667,99 @@ func applyYAML(ctx context.Context, yaml string) error {
 	}
 
 	return nil
+}
+
+// backend/internal/kubevirt/client.go
+
+// Add the following new method to the Client struct:
+
+// ExecuteCommandInVMWithSSH executes a command in a VM using virtctl ssh
+func (c *Client) ExecuteCommandInVMWithSSH(ctx context.Context, namespace, vmName, command string) (string, error) {
+	// Log attempt to execute command
+	logrus.WithFields(logrus.Fields{
+		"vmName":    vmName,
+		"namespace": namespace,
+		"command":   command,
+	}).Debug("Executing command in VM using virtctl ssh")
+
+	// Create a temporary file to store the command output
+	outputFile, err := os.CreateTemp("", "virtctl-ssh-output-")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file for output: %w", err)
+	}
+	defer os.Remove(outputFile.Name())
+	defer outputFile.Close()
+
+	// Create the virtctl ssh command with proper arguments
+	args := []string{
+		"ssh",
+		fmt.Sprintf("vmi/%s", vmName),
+		"-n", namespace,
+		"-l", "suporte", // Default username for our VMs
+		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
+		"--command=" + command,
+	}
+
+	cmd := exec.CommandContext(ctx, "virtctl", args...)
+
+	// Set the output to our temp file
+	cmd.Stdout = outputFile
+	cmd.Stderr = outputFile
+
+	// Execute the command
+	if err := cmd.Run(); err != nil {
+		// Read error output from the file
+		outputFile.Seek(0, 0)
+		output, readErr := io.ReadAll(outputFile)
+		if readErr != nil {
+			return "", fmt.Errorf("command failed and could not read error output: %w", err)
+		}
+		return "", fmt.Errorf("command execution failed: %w, output: %s", err, string(output))
+	}
+
+	// Read the output
+	outputFile.Seek(0, 0)
+	output, err := io.ReadAll(outputFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read command output: %w", err)
+	}
+
+	return string(output), nil
+}
+
+// GetVMStatus gets the status of a VM
+func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (string, error) {
+	vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	if vm.Status.Ready {
+		return "Running", nil
+	}
+
+	if vm.Status.Created {
+		return "Starting", nil
+	}
+
+	return "Pending", nil
+}
+
+// GetVMSSHInfo returns the information needed to establish an SSH connection to a VM
+func (c *Client) GetVMSSHInfo(ctx context.Context, namespace, vmName string) (string, int, error) {
+	// Default SSH port
+	sshPort := 22
+
+	// Check if VM exists and is running
+	status, err := c.GetVMStatus(ctx, namespace, vmName)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to get VM status: %w", err)
+	}
+
+	if status != "Running" {
+		return "", 0, fmt.Errorf("VM is not in running state (current: %s)", status)
+	}
+
+	// For virtctl SSH, we'll use the VM name directly since virtctl knows how to resolve it
+	return vmName, sshPort, nil
 }

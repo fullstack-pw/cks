@@ -5,7 +5,9 @@ package terminal
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -158,6 +160,7 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	}
 	session.ActiveConnection = true
 	session.ConnectionMutex.Unlock()
+
 	// Set up websocket
 	upgrader := websocket.Upgrader{
 		ReadBufferSize:  1024,
@@ -178,10 +181,19 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 
 	tm.logger.WithFields(logrus.Fields{
 		"terminalID": terminalID,
-		"podName":    session.PodName,
+		"vmName":     session.Target,
 		"namespace":  session.Namespace,
 	}).Info("Handling terminal connection")
 
+	// Create a context with timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	// Check if this is a virtctl SSH connection
+	if session.Container == "virtctl-ssh" {
+		tm.handleVirtctlSSHConnection(ctx, session, ws)
+		return
+	}
 	// Create SPDY executor
 	req := tm.kubeClient.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -263,18 +275,130 @@ func (tm *Manager) ResizeTerminal(terminalID string, rows, cols uint16) error {
 	return nil
 }
 
-// getPodForTarget determines the pod name for a target VM
-func (tm *Manager) getPodForTarget(ctx context.Context, namespace, target string) (string, string, error) {
-	// Use KubeVirt client to get pod name for VM
-	podName, err := tm.kubevirtClient.GetVMPodName(ctx, namespace, target)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to get pod name for VM %s: %w", target, err)
+func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Session, ws *websocket.Conn) {
+	tm.logger.WithFields(logrus.Fields{
+		"terminalID": session.ID,
+		"vmName":     session.Target,
+		"namespace":  session.Namespace,
+	}).Info("Starting virtctl SSH terminal session")
+
+	// Create a channel to signal when the connection is done
+	done := make(chan struct{})
+	defer close(done)
+
+	// Create the virtctl ssh command with proper arguments for interactive use
+	args := []string{
+		"ssh",
+		fmt.Sprintf("vmi/%s", session.Target),
+		"-n", session.Namespace,
+		"-l", "suporte", // Default username for our VMs
+		"--local-ssh-opts=\"-o StrictHostKeyChecking=no\"",
 	}
 
-	// Default container is "compute" for KubeVirt VMs
-	container := "compute"
+	// Create the command
+	cmd := exec.Command("virtctl", args...)
 
-	return podName, container, nil
+	// Create pipes for stdin, stdout, and stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		tm.logger.WithError(err).Error("Failed to create stdin pipe")
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
+		return
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		tm.logger.WithError(err).Error("Failed to create stdout pipe")
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
+		return
+	}
+
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		tm.logger.WithError(err).Error("Failed to create stderr pipe")
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
+		return
+	}
+
+	// Set up a reader that merges stdout and stderr
+	outputReader := io.MultiReader(stdout, stderr)
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		tm.logger.WithError(err).Error("Failed to start virtctl ssh")
+		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to start SSH session: %v", err)))
+		return
+	}
+
+	// Set up a goroutine to handle reading from the command output and sending to the WebSocket
+	go func() {
+		buffer := make([]byte, 4096)
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				n, err := outputReader.Read(buffer)
+				if err != nil {
+					if err != io.EOF {
+						tm.logger.WithError(err).Warn("Error reading from SSH output")
+					}
+					return
+				}
+
+				if n > 0 {
+					if err := ws.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
+						tm.logger.WithError(err).Warn("Error writing to WebSocket")
+						return
+					}
+				}
+			}
+		}
+	}()
+
+	// Set up a goroutine to handle reading from the WebSocket and writing to the command input
+	go func() {
+		for {
+			messageType, p, err := ws.ReadMessage()
+			if err != nil {
+				tm.logger.WithError(err).Debug("WebSocket read error")
+				return
+			}
+
+			// Handle terminal resize messages
+			if messageType == websocket.BinaryMessage && len(p) >= 5 && p[0] == 1 {
+				// We can't directly resize the terminal in SSH, but we could potentially send an escape sequence
+				// This would require implementing ANSI terminal control sequences
+				continue
+			}
+
+			// Write data to stdin
+			if _, err := stdin.Write(p); err != nil {
+				tm.logger.WithError(err).Warn("Error writing to SSH input")
+				return
+			}
+		}
+	}()
+
+	// Wait for the command to complete
+	err = cmd.Wait()
+	if err != nil {
+		// This is not necessarily an error, as the session might just be closed
+		tm.logger.WithError(err).Debug("SSH session ended")
+	}
+
+	// Mark the session as inactive
+	session.ConnectionMutex.Lock()
+	session.ActiveConnection = false
+	session.ConnectionMutex.Unlock()
+
+	tm.logger.WithField("terminalID", session.ID).Info("Terminal session closed")
+}
+
+func (tm *Manager) getPodForTarget(ctx context.Context, namespace, target string) (string, string, error) {
+	// For virtctl SSH, we don't need to find a pod
+	// Instead, we'll return the VM name directly, and a special indicator for using SSH
+	return target, "virtctl-ssh", nil
 }
 
 // cleanupExpiredSessions periodically removes expired sessions
