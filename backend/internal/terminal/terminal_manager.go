@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/creack/pty"
 	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
@@ -291,46 +292,39 @@ func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Sess
 		"ssh",
 		fmt.Sprintf("vmi/%s", session.Target),
 		"-n", session.Namespace,
-		"-l", "suporte", // Default username for our VMs
-		"--local-ssh-opts=\"-o StrictHostKeyChecking=no\"",
+		"--username=suporte",
+		"--known-hosts=/dev/null",
 	}
+
+	// Log the exact command being executed
+	tm.logger.WithFields(logrus.Fields{
+		"command": "virtctl",
+		"args":    args,
+	}).Debug("Executing virtctl SSH command")
 
 	// Create the command
 	cmd := exec.Command("virtctl", args...)
 
-	// Create pipes for stdin, stdout, and stderr
-	stdin, err := cmd.StdinPipe()
+	// Create a pty for the command
+	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		tm.logger.WithError(err).Error("Failed to create stdin pipe")
+		tm.logger.WithError(err).Error("Failed to start pty")
 		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
 		return
 	}
+	defer ptmx.Close()
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		tm.logger.WithError(err).Error("Failed to create stdout pipe")
-		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
-		return
+	// Set up terminal size if possible
+	if err := pty.Setsize(ptmx, &pty.Winsize{
+		Rows: 24,
+		Cols: 80,
+		X:    0,
+		Y:    0,
+	}); err != nil {
+		tm.logger.WithError(err).Warn("Failed to set initial terminal size")
 	}
 
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		tm.logger.WithError(err).Error("Failed to create stderr pipe")
-		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
-		return
-	}
-
-	// Set up a reader that merges stdout and stderr
-	outputReader := io.MultiReader(stdout, stderr)
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
-		tm.logger.WithError(err).Error("Failed to start virtctl ssh")
-		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to start SSH session: %v", err)))
-		return
-	}
-
-	// Set up a goroutine to handle reading from the command output and sending to the WebSocket
+	// Set up a goroutine to handle reading from the pty
 	go func() {
 		buffer := make([]byte, 4096)
 		for {
@@ -338,10 +332,10 @@ func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Sess
 			case <-done:
 				return
 			default:
-				n, err := outputReader.Read(buffer)
+				n, err := ptmx.Read(buffer)
 				if err != nil {
 					if err != io.EOF {
-						tm.logger.WithError(err).Warn("Error reading from SSH output")
+						tm.logger.WithError(err).Debug("Error reading from pty")
 					}
 					return
 				}
@@ -356,25 +350,40 @@ func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Sess
 		}
 	}()
 
-	// Set up a goroutine to handle reading from the WebSocket and writing to the command input
+	// Set up a goroutine to handle reading from the WebSocket
 	go func() {
 		for {
 			messageType, p, err := ws.ReadMessage()
 			if err != nil {
-				tm.logger.WithError(err).Debug("WebSocket read error")
+				tm.logger.WithError(err).Debug("WebSocket read error, closing pty")
 				return
 			}
 
 			// Handle terminal resize messages
 			if messageType == websocket.BinaryMessage && len(p) >= 5 && p[0] == 1 {
-				// We can't directly resize the terminal in SSH, but we could potentially send an escape sequence
-				// This would require implementing ANSI terminal control sequences
+				width := uint16(p[1])<<8 | uint16(p[2])
+				height := uint16(p[3])<<8 | uint16(p[4])
+
+				tm.logger.WithFields(logrus.Fields{
+					"width":  width,
+					"height": height,
+				}).Debug("Terminal resize request")
+
+				// Resize the pty
+				if err := pty.Setsize(ptmx, &pty.Winsize{
+					Rows: height,
+					Cols: width,
+					X:    0,
+					Y:    0,
+				}); err != nil {
+					tm.logger.WithError(err).Warn("Failed to resize terminal")
+				}
 				continue
 			}
 
-			// Write data to stdin
-			if _, err := stdin.Write(p); err != nil {
-				tm.logger.WithError(err).Warn("Error writing to SSH input")
+			// Write data to pty
+			if _, err := ptmx.Write(p); err != nil {
+				tm.logger.WithError(err).Warn("Error writing to pty")
 				return
 			}
 		}
@@ -382,9 +391,11 @@ func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Sess
 
 	// Wait for the command to complete
 	err = cmd.Wait()
+
 	if err != nil {
-		// This is not necessarily an error, as the session might just be closed
-		tm.logger.WithError(err).Debug("SSH session ended")
+		tm.logger.WithError(err).Debug("SSH session ended with error")
+	} else {
+		tm.logger.Info("SSH session ended normally")
 	}
 
 	// Mark the session as inactive
@@ -393,6 +404,25 @@ func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Sess
 	session.ConnectionMutex.Unlock()
 
 	tm.logger.WithField("terminalID", session.ID).Info("Terminal session closed")
+}
+
+// testVirtctlConnection tests if virtctl can connect to the VM
+func (tm *Manager) testVirtctlConnection(namespace, vmName string) error {
+	// Test with a simple command first
+	cmd := exec.Command("virtctl", "ssh",
+		fmt.Sprintf("vmi/%s", vmName),
+		"-n", namespace,
+		"-l", "suporte",
+		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
+		"--command", "echo test",
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("virtctl connection test failed: %v, output: %s", err, string(output))
+	}
+
+	return nil
 }
 
 func (tm *Manager) getPodForTarget(ctx context.Context, namespace, target string) (string, string, error) {
