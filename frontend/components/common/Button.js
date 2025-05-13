@@ -20,6 +20,7 @@ const Button = ({
   onClick,
   children,
   className = '',
+  type = 'button',  // Default to 'button' instead of letting it default to 'submit'
   ...props
 }) => {
   // Variant styles
@@ -42,6 +43,7 @@ const Button = ({
 
   return (
     <button
+      type={type}  // Explicitly set the type
       onClick={onClick}
       disabled={disabled || isLoading}
       className={`rounded font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${variantClass} ${sizeClass} ${(disabled || isLoading) ? 'opacity-50 cursor-not-allowed' : ''

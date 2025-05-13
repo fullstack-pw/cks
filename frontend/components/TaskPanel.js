@@ -43,6 +43,12 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
     // Handle task validation
     const handleValidateTask = async (taskId) => {
+        // Prevent any default behavior or propagation
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
         setValidating(true);
         setValidationResult(null);
 
@@ -269,6 +275,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                     {/* Validation button */}
                     <div className="pt-4">
                         <Button
+                            type="button"
                             variant="primary"
                             onClick={() => handleValidateTask(currentTask.id)}
                             isLoading={validating}

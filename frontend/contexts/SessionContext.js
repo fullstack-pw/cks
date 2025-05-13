@@ -118,8 +118,12 @@ export const SessionProvider = ({ children }) => {
         setLoading(true);
         setError(null);
 
+        console.log('[Validation] Starting validation for task:', taskId, 'in session:', sessionId);
+
         try {
             const result = await api.tasks.validate(sessionId, taskId);
+            console.log('[Validation] Result:', result);
+
             // Revalidate to get updated session data
             mutate(`/sessions/${sessionId}`);
 
@@ -129,19 +133,18 @@ export const SessionProvider = ({ children }) => {
                 toast.warning(result.message || 'Task validation failed');
             }
 
-            return result; // Always return the result, don't throw
+            return result;
 
         } catch (err) {
+            console.error('[Validation] Error:', err);
             const processedError = ErrorHandler.handleError(
                 err,
                 'task:validate',
-                null // Don't show double toast
+                null
             );
 
-            // Show toast notification
             toast.error(processedError.message);
 
-            // Return error as result instead of throwing
             return {
                 success: false,
                 message: processedError.message,

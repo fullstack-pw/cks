@@ -21,13 +21,17 @@ class ApiClient {
         const controller = new AbortController();
         const { signal } = controller;
 
+        // Add debug logging
+        const fullUrl = `${API_BASE_URL}${url}`;
+        console.log('[API] Request:', options.method || 'GET', fullUrl);
+
         // Set up timeout
         const timeoutId = setTimeout(() => {
             controller.abort();
         }, timeout);
 
         try {
-            const response = await fetch(`${API_BASE_URL}${url}`, {
+            const response = await fetch(fullUrl, {
                 ...options,
                 signal,
                 headers: {
@@ -39,6 +43,9 @@ class ApiClient {
             // Clear timeout since request completed
             clearTimeout(timeoutId);
 
+            // Log response status
+            console.log('[API] Response:', response.status, response.statusText);
+
             // Handle HTTP errors
             if (!response.ok) {
                 const error = new Error(`API request failed: ${response.status} ${response.statusText}`);
@@ -48,6 +55,7 @@ class ApiClient {
 
                 try {
                     error.info = await response.json();
+                    console.log('[API] Error details:', error.info);
                 } catch (e) {
                     error.info = { message: response.statusText };
                 }
@@ -61,11 +69,12 @@ class ApiClient {
                 return null;
             }
 
-            return response.json();
-        } catch (error) {
-            // Clear timeout if there's an error
+            const data = await response.json();
+            console.log('[API] Success:', data);
+            return data;
+        } catch (error) {            // Clear timeout if there's an error
             clearTimeout(timeoutId);
-
+            console.error('[API] Error:', error);
             // Handle abort error (timeout)
             if (error.name === 'AbortError') {
                 const timeoutError = new Error(`Request timed out after ${timeout}ms`);
