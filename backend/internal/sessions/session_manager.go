@@ -277,15 +277,32 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		return nil, fmt.Errorf("session has no associated scenario")
 	}
 
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":  sessionID,
+		"taskID":     taskID,
+		"scenarioID": session.ScenarioID,
+	}).Debug("Starting task validation")
+
 	// Load scenario to get task validation rules
 	scenario, err := sm.loadScenario(ctx, session.ScenarioID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load scenario: %w", err)
 	}
 
+	sm.logger.WithFields(logrus.Fields{
+		"scenarioID": scenario.ID,
+		"taskCount":  len(scenario.Tasks),
+	}).Debug("Loaded scenario for validation")
+
 	// Find task in scenario
 	var taskToValidate *models.Task
 	for _, task := range scenario.Tasks {
+		sm.logger.WithFields(logrus.Fields{
+			"checkingTaskID": task.ID,
+			"targetTaskID":   taskID,
+			"match":          task.ID == taskID,
+		}).Debug("Comparing task IDs")
+
 		if task.ID == taskID {
 			taskToValidate = &task
 			break
@@ -293,8 +310,27 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 	}
 
 	if taskToValidate == nil {
+		sm.logger.WithFields(logrus.Fields{
+			"sessionID":  sessionID,
+			"taskID":     taskID,
+			"scenarioID": session.ScenarioID,
+			"availableTasks": func() []string {
+				ids := make([]string, len(scenario.Tasks))
+				for i, t := range scenario.Tasks {
+					ids[i] = t.ID
+				}
+				return ids
+			}(),
+		}).Error("Task not found in scenario")
+
 		return nil, fmt.Errorf("task %s not found in scenario %s", taskID, session.ScenarioID)
 	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":          taskID,
+		"taskTitle":       taskToValidate.Title,
+		"validationRules": len(taskToValidate.Validation),
+	}).Info("Found task for validation")
 
 	// Check if task has validation rules
 	if len(taskToValidate.Validation) == 0 {
@@ -310,6 +346,16 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 			Message: "No validation rules defined for this task",
 			Details: []models.ValidationDetail{},
 		}, nil
+	}
+
+	// Log each validation rule
+	for i, rule := range taskToValidate.Validation {
+		sm.logger.WithFields(logrus.Fields{
+			"taskID":    taskID,
+			"ruleIndex": i,
+			"ruleID":    rule.ID,
+			"ruleType":  rule.Type,
+		}).Debug("Validating rule")
 	}
 
 	// Validate task using the validation engine
@@ -339,6 +385,7 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		"taskID":    taskID,
 		"success":   result.Success,
 		"status":    status,
+		"details":   len(result.Details),
 	}).Info("Task validation completed")
 
 	return result, nil

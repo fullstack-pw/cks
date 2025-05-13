@@ -314,6 +314,12 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 		matches := taskPattern.FindStringSubmatch(entry.Name())
 		taskID := matches[1]
 
+		sm.logger.WithFields(logrus.Fields{
+			"scenarioID": scenario.ID,
+			"taskID":     taskID,
+			"fileName":   entry.Name(),
+		}).Debug("Processing task file")
+
 		taskPath := filepath.Join(tasksDir, entry.Name())
 
 		// Load task with proper resource management
@@ -342,9 +348,19 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 		validationFile := fmt.Sprintf("%s-validation.yaml", taskID)
 		validationPath := filepath.Join(scenarioPath, "validation", validationFile)
 
+		sm.logger.WithFields(logrus.Fields{
+			"taskID":         taskID,
+			"validationPath": validationPath,
+		}).Debug("Loading validation rules")
+
 		if err := sm.loadValidationRules(&task, validationPath); err != nil {
 			sm.logger.WithError(err).Warnf("Failed to load validation for task %s", taskID)
 			// Continue without validation
+		} else {
+			sm.logger.WithFields(logrus.Fields{
+				"taskID":          taskID,
+				"validationRules": len(task.Validation),
+			}).Info("Task validation loaded successfully")
 		}
 
 		scenario.Tasks = append(scenario.Tasks, task)
@@ -358,7 +374,18 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 	sm.logger.WithFields(logrus.Fields{
 		"scenarioID": scenario.ID,
 		"taskCount":  len(scenario.Tasks),
-	}).Debug("Loaded tasks")
+	}).Info("Finished loading tasks")
+
+	// Log final task details
+	for i, task := range scenario.Tasks {
+		sm.logger.WithFields(logrus.Fields{
+			"scenarioID":      scenario.ID,
+			"taskIndex":       i,
+			"taskID":          task.ID,
+			"taskTitle":       task.Title,
+			"validationCount": len(task.Validation),
+		}).Debug("Final task loaded")
+	}
 
 	return nil
 }
@@ -367,7 +394,10 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath string) error {
 	// Check if validation file exists
 	if _, err := os.Stat(validationPath); os.IsNotExist(err) {
-		sm.logger.WithField("path", validationPath).Debug("No validation file found")
+		sm.logger.WithFields(logrus.Fields{
+			"taskID": task.ID,
+			"path":   validationPath,
+		}).Debug("No validation file found")
 		return nil // Not an error, validation is optional
 	}
 
@@ -383,6 +413,12 @@ func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath
 		return NewIOError("read validation", validationPath, err)
 	}
 
+	// Log the content for debugging
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":  task.ID,
+		"content": string(validationContent),
+	}).Debug("Read validation content")
+
 	// Parse validation YAML
 	var validation struct {
 		Validation []models.ValidationRule `yaml:"validation"`
@@ -392,19 +428,34 @@ func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath
 		return NewScenarioInvalidError(task.ID, fmt.Sprintf("invalid validation YAML: %v", err))
 	}
 
+	// Ensure validation rules have been parsed
+	if len(validation.Validation) == 0 {
+		sm.logger.WithField("taskID", task.ID).Warn("No validation rules found in YAML")
+	} else {
+		sm.logger.WithFields(logrus.Fields{
+			"taskID":    task.ID,
+			"ruleCount": len(validation.Validation),
+		}).Info("Successfully loaded validation rules")
+	}
+
 	task.Validation = validation.Validation
 
-	sm.logger.WithFields(logrus.Fields{
-		"taskID":    task.ID,
-		"ruleCount": len(task.Validation),
-	}).Debug("Loaded validation rules")
+	// Log each rule for debugging
+	for i, rule := range task.Validation {
+		sm.logger.WithFields(logrus.Fields{
+			"taskID":    task.ID,
+			"ruleIndex": i,
+			"ruleID":    rule.ID,
+			"ruleType":  rule.Type,
+		}).Debug("Loaded validation rule")
+	}
 
 	return nil
 }
 
 // parseTaskMarkdown remains the same as before, just adding proper error handling
 func (sm *ScenarioManager) parseTaskMarkdown(taskID, content string) (models.Task, error) {
-	task := models.Task{ID: taskID}
+	task := models.Task{ID: taskID} // Keep the ID as-is (e.g., "01")
 
 	lines := strings.Split(content, "\n")
 	currentSection := ""
@@ -456,6 +507,11 @@ func (sm *ScenarioManager) parseTaskMarkdown(taskID, content string) (models.Tas
 	if task.Title == "" {
 		task.Title = fmt.Sprintf("Task %s", taskID)
 	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"taskID": task.ID,
+		"title":  task.Title,
+	}).Debug("Parsed task from markdown")
 
 	return task, nil
 }

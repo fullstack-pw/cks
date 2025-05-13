@@ -33,3 +33,7 @@ func (s *ScenarioServiceImpl) ListScenarios(category, difficulty, searchQuery st
 func (s *ScenarioServiceImpl) GetCategories() (map[string]string, error) {
 	return s.scenarioManager.GetCategories()
 }
+
+func (s *ScenarioServiceImpl) ReloadScenarios() error {
+	return s.scenarioManager.ReloadScenarios()
+}

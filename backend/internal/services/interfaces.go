@@ -38,6 +38,7 @@ type ScenarioService interface {
 	GetScenario(id string) (*models.Scenario, error)
 	ListScenarios(category, difficulty, searchQuery string) ([]*models.Scenario, error)
 	GetCategories() (map[string]string, error)
+	ReloadScenarios() error
 }
 
 // ValidationService defines the interface for validation-related operations

@@ -28,6 +28,7 @@ func (sc *ScenarioController) RegisterRoutes(router *gin.Engine) {
 		scenarios.GET("", sc.ListScenarios)
 		scenarios.GET("/:id", sc.GetScenario)
 		scenarios.GET("/categories", sc.ListCategories)
+		scenarios.POST("/reload", sc.ReloadScenarios)
 	}
 }
 
@@ -70,4 +71,14 @@ func (sc *ScenarioController) ListCategories(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, categories)
+}
+
+// ReloadScenarios handles scenario reloading
+func (sc *ScenarioController) ReloadScenarios(c *gin.Context) {
+	err := sc.scenarioService.ReloadScenarios()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Scenarios reloaded"})
 }

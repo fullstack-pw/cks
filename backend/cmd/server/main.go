@@ -45,7 +45,7 @@ func main() {
 	logLevel, err := logrus.ParseLevel(cfg.LogLevel)
 	if err != nil {
 		logger.WithError(err).Warn("Invalid log level, using info")
-		logLevel = logrus.InfoLevel
+		logLevel = logrus.DebugLevel
 	}
 	logger.SetLevel(logLevel)
 
