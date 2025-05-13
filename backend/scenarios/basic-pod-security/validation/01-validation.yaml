@@ -1,32 +1,47 @@
-criteria:
-  - type: resource_exists
+# validation/01-validation.yaml
+validation:
+  - id: pod-exists
+    type: resource_exists
     resource:
       kind: Pod
       name: secure-pod
       namespace: default
-    error_message: "Pod 'secure-pod' does not exist in the default namespace"
+    errorMessage: "Pod 'secure-pod' does not exist"
 
-  - type: resource_property
+  - id: security-context
+    type: resource_property
     resource:
       kind: Pod
       name: secure-pod
       namespace: default
     property: .spec.securityContext.runAsUser
     condition: equals
-    value: 1000
-    error_message: "Pod 'secure-pod' is not configured to run as user ID 1000"
+    value: "1000"
+    errorMessage: "Pod is not running as user 1000"
 
-  - type: resource_property
+  - id: no-privilege-escalation
+    type: resource_property
     resource:
       kind: Pod
       name: secure-pod
       namespace: default
     property: .spec.containers[0].securityContext.allowPrivilegeEscalation
     condition: equals
-    value: false
-    error_message: "Container in 'secure-pod' does not have privilege escalation disabled"
+    value: "false"
+    errorMessage: "Privilege escalation is not disabled"
 
-  - type: command
+  - id: pod-running
+    type: command
+    target: control-plane
     command: "kubectl get pod secure-pod -o jsonpath='{.status.phase}'"
-    output_match: Running
-    error_message: "Pod 'secure-pod' is not in Running state"
+    condition: output_equals
+    value: "Running"
+    errorMessage: "Pod is not in Running state"
+
+  - id: custom-check
+    type: script
+    script: |
+      #!/bin/bash
+      kubectl exec secure-pod -- id -u | grep -q 1000
+    successCode: 0
+    errorMessage: "Pod is not actually running as UID 1000"

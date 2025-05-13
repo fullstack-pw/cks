@@ -17,6 +17,7 @@ import (
 	"github.com/fullstack-pw/cks/backend/internal/config"
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/models"
+	"github.com/fullstack-pw/cks/backend/internal/scenarios"
 	"github.com/fullstack-pw/cks/backend/internal/validation"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -33,10 +34,17 @@ type SessionManager struct {
 	validationEngine *validation.Engine
 	logger           *logrus.Logger
 	stopCh           chan struct{}
+	scenarioManager  *scenarios.ScenarioManager
 }
 
-// NewSessionManager creates a new session manager
-func NewSessionManager(cfg *config.Config, clientset *kubernetes.Clientset, kubevirtClient *kubevirt.Client, validationEngine *validation.Engine, logger *logrus.Logger) (*SessionManager, error) {
+func NewSessionManager(
+	cfg *config.Config,
+	clientset *kubernetes.Clientset,
+	kubevirtClient *kubevirt.Client,
+	validationEngine *validation.Engine,
+	logger *logrus.Logger,
+	scenarioManager *scenarios.ScenarioManager, // Add this parameter
+) (*SessionManager, error) {
 	sm := &SessionManager{
 		sessions:         make(map[string]*models.Session),
 		clientset:        clientset,
@@ -45,6 +53,7 @@ func NewSessionManager(cfg *config.Config, clientset *kubernetes.Clientset, kube
 		validationEngine: validationEngine,
 		logger:           logger,
 		stopCh:           make(chan struct{}),
+		scenarioManager:  scenarioManager, // Add this
 	}
 
 	// Start session cleanup goroutine
@@ -520,13 +529,22 @@ func (sm *SessionManager) loadScenario(ctx context.Context, scenarioID string) (
 	return nil, nil
 }
 
-// initializeScenario sets up the initial resources for a scenario
 func (sm *SessionManager) initializeScenario(ctx context.Context, session *models.Session) error {
-	// This is a placeholder - in a real implementation, this would:
-	// 1. Load scenario definition
-	// 2. Create any required resources
-	// 3. Run setup scripts
-	// 4. Wait for everything to be ready
+	// Load scenario
+	scenario, err := sm.scenarioManager.GetScenario(session.ScenarioID)
+	if err != nil {
+		return fmt.Errorf("failed to load scenario: %w", err)
+	}
+
+	// Create scenario initializer
+	initializer := scenarios.NewScenarioInitializer(sm.clientset, sm.kubevirtClient, sm.logger)
+
+	// Run initialization
+	err = initializer.InitializeScenario(ctx, session, scenario)
+	if err != nil {
+		return fmt.Errorf("scenario initialization failed: %w", err)
+	}
+
 	return nil
 }
 

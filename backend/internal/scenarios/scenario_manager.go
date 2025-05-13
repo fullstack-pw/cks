@@ -7,12 +7,13 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
-	"gopkg.in/yaml.v2"
-
 	"github.com/fullstack-pw/cks/backend/internal/models"
+	"github.com/sirupsen/logrus"
+	"gopkg.in/yaml.v2"
 )
 
 // ScenarioManager handles loading and managing scenarios
@@ -21,14 +22,15 @@ type ScenarioManager struct {
 	scenarios    map[string]*models.Scenario
 	categories   map[string]string
 	lock         sync.RWMutex
+	logger       *logrus.Logger
 }
 
-// NewScenarioManager creates a new scenario manager
-func NewScenarioManager(scenariosDir string) (*ScenarioManager, error) {
+func NewScenarioManager(scenariosDir string, logger *logrus.Logger) (*ScenarioManager, error) {
 	sm := &ScenarioManager{
 		scenariosDir: scenariosDir,
 		scenarios:    make(map[string]*models.Scenario),
 		categories:   make(map[string]string),
+		logger:       logger, // Add this
 	}
 
 	// Load scenarios and categories
@@ -43,6 +45,45 @@ func NewScenarioManager(scenariosDir string) (*ScenarioManager, error) {
 	}
 
 	return sm, nil
+}
+
+func parseSteps(stepLines []string) []string {
+	steps := []string{}
+	for _, line := range stepLines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "1.") || strings.HasPrefix(line, "2.") || strings.HasPrefix(line, "-") {
+			steps = append(steps, line)
+		}
+	}
+	return steps
+}
+
+func parseHints(hintLines []string) []string {
+	hints := []string{}
+	currentHint := ""
+	inHint := false
+
+	for _, line := range hintLines {
+		if strings.Contains(line, "<summary>") {
+			inHint = true
+			// Extract hint title
+			start := strings.Index(line, "<summary>") + 9
+			end := strings.Index(line, "</summary>")
+			if end > start {
+				currentHint = line[start:end]
+			}
+		} else if strings.Contains(line, "</details>") {
+			if currentHint != "" {
+				hints = append(hints, currentHint)
+				currentHint = ""
+			}
+			inHint = false
+		} else if inHint && strings.TrimSpace(line) != "" {
+			currentHint += " " + strings.TrimSpace(line)
+		}
+	}
+
+	return hints
 }
 
 // GetScenario returns a scenario by ID
@@ -211,72 +252,90 @@ func (sm *ScenarioManager) loadScenarios() error {
 	return nil
 }
 
-// loadTasks loads all tasks for a scenario
+// Fix loadTasks to handle markdown files
 func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath string) error {
 	tasksDir := filepath.Join(scenarioPath, "tasks")
 
-	// Check if tasks directory exists
-	info, err := os.Stat(tasksDir)
-	if err != nil {
-		return fmt.Errorf("failed to access tasks directory: %v", err)
-	}
-
-	if !info.IsDir() {
-		return fmt.Errorf("tasks path is not a directory: %s", tasksDir)
-	}
-
-	// Get all task files
 	entries, err := os.ReadDir(tasksDir)
 	if err != nil {
 		return fmt.Errorf("failed to read tasks directory: %v", err)
 	}
 
-	// Process each task file
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
 			continue
 		}
 
-		taskPath := filepath.Join(tasksDir, entry.Name())
+		// Extract task ID from filename (e.g., "01-task.md" -> "01")
+		taskID := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".md"), "-task")
 
-		// Load task content
+		taskPath := filepath.Join(tasksDir, entry.Name())
 		taskContent, err := os.ReadFile(taskPath)
 		if err != nil {
-			fmt.Printf("Warning: failed to read task file %s: %v\n", taskPath, err)
-			continue
+			return fmt.Errorf("failed to read task %s: %v", taskPath, err)
 		}
 
-		// Extract task ID from filename
-		taskID := strings.TrimSuffix(entry.Name(), ".md")
-
-		// Extract title from first line of markdown
-		lines := strings.Split(string(taskContent), "\n")
-		title := ""
-		if len(lines) > 0 && strings.HasPrefix(lines[0], "# ") {
-			title = strings.TrimPrefix(lines[0], "# ")
-		} else {
-			title = fmt.Sprintf("Task %s", taskID)
+		// Parse markdown to extract sections
+		task, err := sm.parseTaskMarkdown(taskID, string(taskContent))
+		if err != nil {
+			return fmt.Errorf("failed to parse task %s: %v", taskPath, err)
 		}
 
-		// Create task
-		task := models.Task{
-			ID:          taskID,
-			Title:       title,
-			Description: string(taskContent),
-		}
-
-		// Load validation rules for this task
+		// Load validation for this task
 		validationPath := filepath.Join(scenarioPath, "validation", fmt.Sprintf("%s-validation.yaml", taskID))
 		err = sm.loadValidationRules(&task, validationPath)
 		if err != nil {
-			fmt.Printf("Warning: failed to load validation rules for task %s: %v\n", taskID, err)
+			// Validation is optional
+			sm.logger.WithError(err).Warnf("No validation rules for task %s", taskID)
 		}
 
-		// Add task to scenario
 		scenario.Tasks = append(scenario.Tasks, task)
 	}
 
+	// Sort tasks by ID to ensure correct order
+	sort.Slice(scenario.Tasks, func(i, j int) bool {
+		return scenario.Tasks[i].ID < scenario.Tasks[j].ID
+	})
+
 	return nil
+}
+
+// New function to parse markdown
+func (sm *ScenarioManager) parseTaskMarkdown(taskID, content string) (models.Task, error) {
+	task := models.Task{ID: taskID}
+
+	// Simple parser - in production, use a proper markdown parser
+	lines := strings.Split(content, "\n")
+	currentSection := ""
+	sectionContent := make(map[string][]string)
+
+	for _, line := range lines {
+		if strings.HasPrefix(line, "# ") {
+			task.Title = strings.TrimPrefix(line, "# ")
+		} else if strings.HasPrefix(line, "## ") {
+			currentSection = strings.TrimPrefix(line, "## ")
+			sectionContent[currentSection] = []string{}
+		} else if currentSection != "" {
+			sectionContent[currentSection] = append(sectionContent[currentSection], line)
+		}
+	}
+
+	// Extract key sections
+	if objective, ok := sectionContent["Objective"]; ok {
+		task.Objective = strings.Join(objective, "\n")
+	}
+
+	if steps, ok := sectionContent["Steps"]; ok {
+		task.Steps = parseSteps(steps)
+	}
+
+	if hints, ok := sectionContent["Hints"]; ok {
+		task.Hints = parseHints(hints)
+	}
+
+	task.Description = content // Keep full content as description
+
+	return task, nil
 }
 
 // loadValidationRules loads validation rules for a task

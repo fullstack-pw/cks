@@ -62,6 +62,7 @@ type Scenario struct {
 	SetupSteps   []SetupStep          `json:"setupSteps"`
 	Author       string               `json:"author,omitempty"`
 	Version      string               `json:"version"`
+	InitScript   string               `json:"initScript,omitempty"` // Path to init script
 }
 
 // ScenarioRequirements defines the requirements for a scenario
@@ -80,22 +81,57 @@ type Task struct {
 	Description string           `json:"description"`
 	Validation  []ValidationRule `json:"validation"`
 	Hints       []string         `json:"hints,omitempty"`
+	Objective   string           `json:"objective,omitempty"` // Add this line
+	Steps       []string         `json:"steps,omitempty"`     // Add this line
+
 }
 
-// ValidationRule represents a validation rule for a task
 type ValidationRule struct {
-	Type      string `json:"type"`      // "resource", "command", "custom"
-	Target    string `json:"target"`    // resource name, command, etc.
-	Condition string `json:"condition"` // validation condition
-	Value     string `json:"value"`     // expected value
+	ID           string          `json:"id"`
+	Type         string          `json:"type"`
+	Description  string          `json:"description,omitempty"`
+	Resource     *ResourceTarget `json:"resource,omitempty"`
+	Command      *CommandTarget  `json:"command,omitempty"`
+	Script       *ScriptTarget   `json:"script,omitempty"`
+	File         *FileTarget     `json:"file,omitempty"`
+	Condition    string          `json:"condition"`
+	Value        interface{}     `json:"value"`
+	ErrorMessage string          `json:"errorMessage"`
 }
 
-// SetupStep represents a step to set up a scenario
+type ResourceTarget struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Property  string `json:"property,omitempty"`
+}
+
+type CommandTarget struct {
+	Command string `json:"command"`
+	Target  string `json:"target"` // "control-plane" or "worker"
+}
+
+type ScriptTarget struct {
+	Script      string `json:"script"`
+	Target      string `json:"target"`
+	SuccessCode int    `json:"successCode"`
+}
+
+type FileTarget struct {
+	Path   string `json:"path"`
+	Target string `json:"target"`
+}
 type SetupStep struct {
-	Type    string `json:"type"`    // "resource", "command", "wait"
-	Target  string `json:"target"`  // resource name, command, etc.
-	Action  string `json:"action"`  // action to perform
-	Timeout string `json:"timeout"` // timeout for wait actions
+	ID          string           `json:"id"`
+	Type        string           `json:"type"`   // "command", "resource", "script", "wait"
+	Target      string           `json:"target"` // "control-plane", "worker", "both"
+	Description string           `json:"description"`
+	Command     string           `json:"command,omitempty"`
+	Script      string           `json:"script,omitempty"`
+	Resource    string           `json:"resource,omitempty"` // YAML content
+	Timeout     time.Duration    `json:"timeout"`
+	RetryCount  int              `json:"retryCount"`
+	Conditions  []SetupCondition `json:"conditions,omitempty"`
 }
 
 // TerminalSession represents a terminal session for a VM
@@ -153,4 +189,11 @@ type CreateTerminalResponse struct {
 type ResizeTerminalRequest struct {
 	Rows uint16 `json:"rows"`
 	Cols uint16 `json:"cols"`
+}
+
+type SetupCondition struct {
+	Type     string        `json:"type"` // "resource_exists", "command_success", "pod_ready"
+	Resource string        `json:"resource,omitempty"`
+	Command  string        `json:"command,omitempty"`
+	Timeout  time.Duration `json:"timeout"`
 }

@@ -108,17 +108,15 @@ func main() {
 	// Create terminal manager
 	terminalManager := terminal.NewManager(kubeClient, kubevirtClient, k8sConfig, logger)
 
-	// Create session manager
-	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, validationEngine, logger)
-	if err != nil {
-		logger.WithError(err).Fatal("Failed to create session manager")
-	}
-	defer sessionManager.Stop()
-
-	// Create scenario manager
-	scenarioManager, err := scenarios.NewScenarioManager(cfg.ScenariosPath)
+	scenarioManager, err := scenarios.NewScenarioManager(cfg.ScenariosPath, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create scenario manager")
+	}
+
+	// Update session manager creation
+	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, validationEngine, logger, scenarioManager)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create session manager")
 	}
 
 	// Create service layer implementations
