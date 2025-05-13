@@ -222,24 +222,26 @@ func (sm *ScenarioManager) ReloadScenarios() error {
 	return sm.loadScenarios()
 }
 
-// Update loadTasks method to handle markdown files correctly
 func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath string) error {
 	tasksDir := filepath.Join(scenarioPath, "tasks")
 
 	entries, err := os.ReadDir(tasksDir)
 	if err != nil {
-		// Tasks directory might not exist
 		sm.logger.WithField("scenarioID", scenario.ID).Debug("No tasks directory found")
 		return nil
 	}
 
+	// Pattern for task files: 01-task.md, 02-task.md, etc.
+	taskPattern := regexp.MustCompile(`^(\d+)-task\.md$`)
+
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		if entry.IsDir() || !taskPattern.MatchString(entry.Name()) {
 			continue
 		}
 
-		// Extract task ID from filename (e.g., "01-task.md" -> "01")
-		taskID := strings.TrimSuffix(strings.TrimSuffix(entry.Name(), ".md"), "-task")
+		// Extract task ID from filename
+		matches := taskPattern.FindStringSubmatch(entry.Name())
+		taskID := matches[1]
 
 		taskPath := filepath.Join(tasksDir, entry.Name())
 		taskContent, err := os.ReadFile(taskPath)
@@ -256,7 +258,8 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 		}
 
 		// Load validation for this task
-		validationPath := filepath.Join(scenarioPath, "validation", fmt.Sprintf("%s-validation.yaml", taskID))
+		validationFile := fmt.Sprintf("%s-validation.yaml", taskID)
+		validationPath := filepath.Join(scenarioPath, "validation", validationFile)
 		err = sm.loadValidationRules(&task, validationPath)
 		if err != nil {
 			sm.logger.WithError(err).Warnf("Failed to load validation for task %s", taskID)

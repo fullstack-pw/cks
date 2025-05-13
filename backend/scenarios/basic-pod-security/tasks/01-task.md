@@ -1,3 +1,5 @@
+# Task File Format (tasks/01-task.md)
+
 # Task 1: Configure a Pod with Security Context
 
 ## Description
@@ -42,34 +44,29 @@ spec:
     ports:
     - containerPort: 80
 ```
-
 2. Apply the YAML to create the Pod:
-
-```bash
+```
 kubectl apply -f secure-pod.yaml
 ```
-
 3. Verify the Pod is running:
-
-```bash
+```
 kubectl get pod secure-pod
 ```
-
 4. Check the security context of the running Pod:
-
-```bash
+```
 kubectl get pod secure-pod -o yaml | grep -A 10 securityContext
 ```
 
 ## Hints
-
 <details>
 <summary>Hint 1: Security Context Levels</summary>
 Remember that security contexts can be applied at both the Pod level and at the container level. Pod-level settings apply to all containers, while container-level settings override Pod-level settings.
 </details>
-
 <details>
-<summary>Hint 2: Checking User ID</summary>
+<summary>
+
+## Hint 2: Checking User ID
+</summary>
 You can verify the user ID by executing a command in the container:
 ```bash
 kubectl exec secure-pod -- id
@@ -78,7 +75,7 @@ kubectl exec secure-pod -- id
 
 ## Validation Criteria
 
-- Pod `secure-pod` exists in the `default` namespace
-- Pod is running with user ID 1000
-- Pod has privilege escalation disabled
-- Pod status is Running
+Pod secure-pod exists in the default namespace
+Pod is running with user ID 1000
+Pod has privilege escalation disabled
+Pod status is Running
