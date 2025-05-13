@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -30,11 +31,11 @@ func NewScenarioManager(scenariosDir string, logger *logrus.Logger) (*ScenarioMa
 		scenariosDir: scenariosDir,
 		scenarios:    make(map[string]*models.Scenario),
 		categories:   make(map[string]string),
-		logger:       logger, // Add this
+		logger:       logger,
 	}
 
 	// Load scenarios and categories
-	err := sm.loadScenarios()
+	err := sm.loadScenarios() // This is already being called here
 	if err != nil {
 		return nil, err
 	}
@@ -45,6 +46,83 @@ func NewScenarioManager(scenariosDir string, logger *logrus.Logger) (*ScenarioMa
 	}
 
 	return sm, nil
+}
+
+// Add this method to ScenarioManager if it's missing
+func (sm *ScenarioManager) loadScenarios() error {
+	// Check if scenarios directory exists
+	info, err := os.Stat(sm.scenariosDir)
+	if err != nil {
+		return fmt.Errorf("failed to access scenarios directory: %v", err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("scenarios path is not a directory: %s", sm.scenariosDir)
+	}
+
+	// Get all scenario directories
+	entries, err := os.ReadDir(sm.scenariosDir)
+	if err != nil {
+		return fmt.Errorf("failed to read scenarios directory: %v", err)
+	}
+
+	// Process each scenario directory
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		scenarioID := entry.Name()
+		scenarioPath := filepath.Join(sm.scenariosDir, scenarioID)
+
+		// Load metadata file
+		metadataPath := filepath.Join(scenarioPath, "metadata.yaml")
+		metadataFile, err := os.Open(metadataPath)
+		if err != nil {
+			sm.logger.WithError(err).Warnf("Failed to open metadata for scenario %s", scenarioID)
+			continue
+		}
+		defer metadataFile.Close()
+
+		metadataContent, err := ioutil.ReadAll(metadataFile)
+		if err != nil {
+			sm.logger.WithError(err).Warnf("Failed to read metadata for scenario %s", scenarioID)
+			continue
+		}
+
+		// Parse metadata
+		var scenario models.Scenario
+		err = yaml.Unmarshal(metadataContent, &scenario)
+		if err != nil {
+			sm.logger.WithError(err).Warnf("Failed to parse metadata for scenario %s", scenarioID)
+			continue
+		}
+
+		// Set ID if not already set
+		if scenario.ID == "" {
+			scenario.ID = scenarioID
+		}
+
+		// Load tasks
+		err = sm.loadTasks(&scenario, scenarioPath)
+		if err != nil {
+			sm.logger.WithError(err).Warnf("Failed to load tasks for scenario %s", scenarioID)
+			continue
+		}
+
+		// Load setup steps
+		err = sm.loadSetupSteps(&scenario, scenarioPath)
+		if err != nil {
+			sm.logger.WithError(err).Warnf("Failed to load setup steps for scenario %s", scenarioID)
+			// Continue without setup steps
+		}
+
+		// Store scenario
+		sm.scenarios[scenario.ID] = &scenario
+	}
+
+	sm.logger.WithField("count", len(sm.scenarios)).Info("Loaded scenarios")
+	return nil
 }
 
 func parseSteps(stepLines []string) []string {
@@ -183,82 +261,15 @@ func (sm *ScenarioManager) ReloadScenarios() error {
 	return sm.loadScenarios()
 }
 
-// loadScenarios loads all scenarios from the scenarios directory
-func (sm *ScenarioManager) loadScenarios() error {
-	// Check if scenarios directory exists
-	info, err := os.Stat(sm.scenariosDir)
-	if err != nil {
-		return fmt.Errorf("failed to access scenarios directory: %v", err)
-	}
-
-	if !info.IsDir() {
-		return fmt.Errorf("scenarios path is not a directory: %s", sm.scenariosDir)
-	}
-
-	// Get all scenario directories
-	entries, err := os.ReadDir(sm.scenariosDir)
-	if err != nil {
-		return fmt.Errorf("failed to read scenarios directory: %v", err)
-	}
-
-	// Process each scenario directory
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-
-		scenarioID := entry.Name()
-		scenarioPath := filepath.Join(sm.scenariosDir, scenarioID)
-
-		// Load metadata file
-		metadataPath := filepath.Join(scenarioPath, "metadata.yaml")
-		metadataFile, err := os.Open(metadataPath)
-		if err != nil {
-			fmt.Printf("Warning: failed to open metadata file for scenario %s: %v\n", scenarioID, err)
-			continue
-		}
-		defer metadataFile.Close()
-
-		metadataContent, err := ioutil.ReadAll(metadataFile)
-		if err != nil {
-			fmt.Printf("Warning: failed to read metadata file for scenario %s: %v\n", scenarioID, err)
-			continue
-		}
-
-		// Parse metadata
-		var scenario models.Scenario
-		err = yaml.Unmarshal(metadataContent, &scenario)
-		if err != nil {
-			fmt.Printf("Warning: failed to parse metadata file for scenario %s: %v\n", scenarioID, err)
-			continue
-		}
-
-		// Set ID if not already set
-		if scenario.ID == "" {
-			scenario.ID = scenarioID
-		}
-
-		// Load tasks
-		err = sm.loadTasks(&scenario, scenarioPath)
-		if err != nil {
-			fmt.Printf("Warning: failed to load tasks for scenario %s: %v\n", scenarioID, err)
-			continue
-		}
-
-		// Store scenario
-		sm.scenarios[scenario.ID] = &scenario
-	}
-
-	return nil
-}
-
-// Fix loadTasks to handle markdown files
+// Update loadTasks method to handle markdown files correctly
 func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath string) error {
 	tasksDir := filepath.Join(scenarioPath, "tasks")
 
 	entries, err := os.ReadDir(tasksDir)
 	if err != nil {
-		return fmt.Errorf("failed to read tasks directory: %v", err)
+		// Tasks directory might not exist
+		sm.logger.WithField("scenarioID", scenario.ID).Debug("No tasks directory found")
+		return nil
 	}
 
 	for _, entry := range entries {
@@ -272,21 +283,23 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 		taskPath := filepath.Join(tasksDir, entry.Name())
 		taskContent, err := os.ReadFile(taskPath)
 		if err != nil {
-			return fmt.Errorf("failed to read task %s: %v", taskPath, err)
+			sm.logger.WithError(err).Warnf("Failed to read task %s", taskPath)
+			continue
 		}
 
-		// Parse markdown to extract sections
+		// Parse markdown to extract task details
 		task, err := sm.parseTaskMarkdown(taskID, string(taskContent))
 		if err != nil {
-			return fmt.Errorf("failed to parse task %s: %v", taskPath, err)
+			sm.logger.WithError(err).Warnf("Failed to parse task %s", taskPath)
+			continue
 		}
 
 		// Load validation for this task
 		validationPath := filepath.Join(scenarioPath, "validation", fmt.Sprintf("%s-validation.yaml", taskID))
 		err = sm.loadValidationRules(&task, validationPath)
 		if err != nil {
-			// Validation is optional
-			sm.logger.WithError(err).Warnf("No validation rules for task %s", taskID)
+			sm.logger.WithError(err).Warnf("Failed to load validation for task %s", taskID)
+			// Continue without validation
 		}
 
 		scenario.Tasks = append(scenario.Tasks, task)
@@ -297,73 +310,204 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 		return scenario.Tasks[i].ID < scenario.Tasks[j].ID
 	})
 
+	sm.logger.WithFields(logrus.Fields{
+		"scenarioID": scenario.ID,
+		"taskCount":  len(scenario.Tasks),
+	}).Debug("Loaded tasks")
+
 	return nil
 }
 
-// New function to parse markdown
+// Enhanced markdown parser for task files
 func (sm *ScenarioManager) parseTaskMarkdown(taskID, content string) (models.Task, error) {
 	task := models.Task{ID: taskID}
 
-	// Simple parser - in production, use a proper markdown parser
 	lines := strings.Split(content, "\n")
 	currentSection := ""
 	sectionContent := make(map[string][]string)
 
 	for _, line := range lines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Extract title from H1
 		if strings.HasPrefix(line, "# ") {
 			task.Title = strings.TrimPrefix(line, "# ")
-		} else if strings.HasPrefix(line, "## ") {
+			continue
+		}
+
+		// Track current section from H2
+		if strings.HasPrefix(line, "## ") {
 			currentSection = strings.TrimPrefix(line, "## ")
 			sectionContent[currentSection] = []string{}
-		} else if currentSection != "" {
+			continue
+		}
+
+		// Add content to current section
+		if currentSection != "" && trimmedLine != "" {
 			sectionContent[currentSection] = append(sectionContent[currentSection], line)
 		}
 	}
 
-	// Extract key sections
-	if objective, ok := sectionContent["Objective"]; ok {
-		task.Objective = strings.Join(objective, "\n")
+	// Extract description
+	if description, exists := sectionContent["Description"]; exists {
+		task.Description = strings.Join(description, "\n")
 	}
 
-	if steps, ok := sectionContent["Steps"]; ok {
-		task.Steps = parseSteps(steps)
+	// Extract objectives
+	if objectives, exists := sectionContent["Objectives"]; exists {
+		task.Objective = strings.Join(objectives, "\n")
 	}
 
-	if hints, ok := sectionContent["Hints"]; ok {
-		task.Hints = parseHints(hints)
+	// Extract step-by-step guide
+	if steps, exists := sectionContent["Step-by-Step Guide"]; exists {
+		task.Steps = sm.parseSteps(steps)
 	}
 
-	task.Description = content // Keep full content as description
+	// Extract hints
+	if hints, exists := sectionContent["Hints"]; exists {
+		task.Hints = sm.parseHints(hints)
+	}
+
+	// If no title found in H1, try to extract from filename
+	if task.Title == "" {
+		task.Title = fmt.Sprintf("Task %s", taskID)
+	}
 
 	return task, nil
 }
 
-// loadValidationRules loads validation rules for a task
+// Improved step parsing
+func (sm *ScenarioManager) parseSteps(stepLines []string) []string {
+	steps := []string{}
+	currentStep := ""
+
+	for _, line := range stepLines {
+		trimmedLine := strings.TrimSpace(line)
+
+		// Look for numbered steps (1., 2., etc.) or bullet points
+		if regexp.MustCompile(`^\d+\.`).MatchString(trimmedLine) || strings.HasPrefix(trimmedLine, "-") {
+			if currentStep != "" {
+				steps = append(steps, currentStep)
+			}
+			currentStep = trimmedLine
+		} else if trimmedLine != "" && currentStep != "" {
+			// Continue previous step
+			currentStep += " " + trimmedLine
+		}
+	}
+
+	if currentStep != "" {
+		steps = append(steps, currentStep)
+	}
+
+	return steps
+}
+
+// Improved hint parsing
+func (sm *ScenarioManager) parseHints(hintLines []string) []string {
+	hints := []string{}
+	currentHint := ""
+	inDetails := false
+
+	for _, line := range hintLines {
+		// Check for <details> block
+		if strings.Contains(line, "<details>") {
+			inDetails = true
+			continue
+		}
+
+		if strings.Contains(line, "</details>") {
+			if currentHint != "" {
+				hints = append(hints, currentHint)
+				currentHint = ""
+			}
+			inDetails = false
+			continue
+		}
+
+		if inDetails {
+			if strings.Contains(line, "<summary>") {
+				// Extract hint title from summary
+				summaryStart := strings.Index(line, "<summary>") + 9
+				summaryEnd := strings.Index(line, "</summary>")
+				if summaryEnd > summaryStart {
+					currentHint = line[summaryStart:summaryEnd]
+				}
+			} else if strings.TrimSpace(line) != "" {
+				// Add content to hint
+				if currentHint != "" {
+					currentHint += " " + strings.TrimSpace(line)
+				}
+			}
+		}
+	}
+
+	return hints
+}
+
+// Add to ScenarioManager
+func (sm *ScenarioManager) loadSetupSteps(scenario *models.Scenario, scenarioPath string) error {
+	setupFile := filepath.Join(scenarioPath, "setup", "init.yaml")
+
+	// Check if setup file exists
+	if _, err := os.Stat(setupFile); os.IsNotExist(err) {
+		sm.logger.WithField("scenarioID", scenario.ID).Debug("No setup file found")
+		return nil // Not an error, setup is optional
+	}
+
+	content, err := os.ReadFile(setupFile)
+	if err != nil {
+		return fmt.Errorf("failed to read setup file: %w", err)
+	}
+
+	var setup struct {
+		Steps []models.SetupStep `yaml:"steps"`
+	}
+
+	err = yaml.Unmarshal(content, &setup)
+	if err != nil {
+		return fmt.Errorf("failed to parse setup file: %w", err)
+	}
+
+	scenario.SetupSteps = setup.Steps
+
+	sm.logger.WithFields(logrus.Fields{
+		"scenarioID": scenario.ID,
+		"stepCount":  len(scenario.SetupSteps),
+	}).Debug("Loaded setup steps")
+
+	return nil
+}
+
+// Fix validation loading to match actual file structure
 func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath string) error {
 	// Check if validation file exists
-	_, err := os.Stat(validationPath)
-	if err != nil {
-		return err
+	if _, err := os.Stat(validationPath); os.IsNotExist(err) {
+		sm.logger.WithField("path", validationPath).Debug("No validation file found")
+		return nil // Not an error, validation is optional
 	}
 
-	// Read validation file
 	validationContent, err := os.ReadFile(validationPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read validation file: %w", err)
 	}
 
-	// Parse validation rules
+	// Update structure to match actual YAML format
 	var validation struct {
-		Criteria []models.ValidationRule `yaml:"criteria"`
+		Validation []models.ValidationRule `yaml:"validation"` // Changed from "criteria"
 	}
 
 	err = yaml.Unmarshal(validationContent, &validation)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to parse validation file: %w", err)
 	}
 
-	// Add validation rules to task
-	task.Validation = validation.Criteria
+	task.Validation = validation.Validation
+
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":    task.ID,
+		"ruleCount": len(task.Validation),
+	}).Debug("Loaded validation rules")
 
 	return nil
 }

@@ -62,6 +62,7 @@ func NewSessionManager(
 	return sm, nil
 }
 
+// Update the task initialization section in CreateSession
 func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) (*models.Session, error) {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
@@ -72,28 +73,38 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 	}
 
 	// Generate session ID
-	sessionID := uuid.New().String()[:8] // Short ID for better user experience
-
-	// Create namespace name
+	sessionID := uuid.New().String()[:8]
 	namespace := fmt.Sprintf("user-session-%s", sessionID)
 
-	// Load scenario to get task info
+	// Initialize variables
 	var tasks []models.TaskStatus
+	var scenarioTitle string
+
+	// Load scenario if specified
 	if scenarioID != "" {
 		scenario, err := sm.loadScenario(ctx, scenarioID)
 		if err != nil {
-			sm.logger.WithError(err).WithField("scenarioID", scenarioID).Warn("Failed to load scenario")
-			// Continue without scenario info
-		} else if scenario != nil {
-			// Initialize task statuses
-			tasks = make([]models.TaskStatus, 0, len(scenario.Tasks))
-			for _, task := range scenario.Tasks {
-				tasks = append(tasks, models.TaskStatus{
-					ID:     task.ID,
-					Status: "pending",
-				})
-			}
+			return nil, fmt.Errorf("failed to load scenario: %w", err)
 		}
+
+		// Store scenario title for logging
+		scenarioTitle = scenario.Title
+
+		// Initialize task statuses from loaded scenario
+		tasks = make([]models.TaskStatus, 0, len(scenario.Tasks))
+		for _, task := range scenario.Tasks {
+			tasks = append(tasks, models.TaskStatus{
+				ID:     task.ID,
+				Status: "pending",
+			})
+		}
+
+		sm.logger.WithFields(logrus.Fields{
+			"sessionID":     sessionID,
+			"scenarioID":    scenarioID,
+			"scenarioTitle": scenarioTitle,
+			"taskCount":     len(tasks),
+		}).Info("Initialized session with scenario tasks")
 	}
 
 	// Create session object
@@ -114,22 +125,20 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 	sm.sessions[sessionID] = session
 
 	sm.logger.WithFields(logrus.Fields{
-		"sessionID":  sessionID,
-		"namespace":  namespace,
-		"scenarioID": scenarioID,
+		"sessionID":     sessionID,
+		"namespace":     namespace,
+		"scenarioID":    scenarioID,
+		"scenarioTitle": scenarioTitle,
 	}).Info("Creating new session")
 
 	// Create namespace asynchronously with a new background context
 	go func() {
-		// Create a new background context with a longer timeout
 		provisionCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer cancel()
 
 		err := sm.provisionEnvironment(provisionCtx, session)
 		if err != nil {
 			sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Failed to provision environment")
-
-			// Update session status
 			sm.lock.Lock()
 			session.Status = models.SessionStatusFailed
 			session.StatusMessage = fmt.Sprintf("Failed to provision environment: %v", err)
@@ -256,15 +265,20 @@ func (sm *SessionManager) UpdateTaskStatus(sessionID, taskID string, status stri
 	return nil
 }
 
-// ValidateTask validates a task in a session
+// Update ValidateTask method
 func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID string) (*models.ValidationResponse, error) {
 	// Get session
 	session, err := sm.GetSession(sessionID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get session: %w", err)
 	}
 
-	// Get scenario to load task validation rules
+	// Check if session has a scenario
+	if session.ScenarioID == "" {
+		return nil, fmt.Errorf("session has no associated scenario")
+	}
+
+	// Load scenario to get task validation rules
 	scenario, err := sm.loadScenario(ctx, session.ScenarioID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load scenario: %w", err)
@@ -280,16 +294,32 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 	}
 
 	if taskToValidate == nil {
-		return nil, fmt.Errorf("task not found in scenario: %s", taskID)
+		return nil, fmt.Errorf("task %s not found in scenario %s", taskID, session.ScenarioID)
 	}
 
-	// Validate task
+	// Check if task has validation rules
+	if len(taskToValidate.Validation) == 0 {
+		sm.logger.WithFields(logrus.Fields{
+			"sessionID":  sessionID,
+			"taskID":     taskID,
+			"scenarioID": session.ScenarioID,
+		}).Warn("Task has no validation rules")
+
+		// Return success if no validation rules
+		return &models.ValidationResponse{
+			Success: true,
+			Message: "No validation rules defined for this task",
+			Details: []models.ValidationDetail{},
+		}, nil
+	}
+
+	// Validate task using the validation engine
 	result, err := sm.validationEngine.ValidateTask(ctx, session, *taskToValidate)
 	if err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Update task status
+	// Update task status based on validation result
 	status := "failed"
 	if result.Success {
 		status = "completed"
@@ -300,9 +330,17 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		sm.logger.WithError(err).WithFields(logrus.Fields{
 			"sessionID": sessionID,
 			"taskID":    taskID,
-		}).Error("Failed to update task status")
-		// Continue despite error
+			"status":    status,
+		}).Error("Failed to update task status after validation")
+		// Continue despite error - validation result is more important
 	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"taskID":    taskID,
+		"success":   result.Success,
+		"status":    status,
+	}).Info("Task validation completed")
 
 	return result, nil
 }
@@ -529,23 +567,68 @@ func (sm *SessionManager) loadScenario(ctx context.Context, scenarioID string) (
 	return nil, nil
 }
 
+// Update initializeScenario method
 func (sm *SessionManager) initializeScenario(ctx context.Context, session *models.Session) error {
+	if session.ScenarioID == "" {
+		return fmt.Errorf("session has no scenario ID")
+	}
+
 	// Load scenario
 	scenario, err := sm.scenarioManager.GetScenario(session.ScenarioID)
 	if err != nil {
 		return fmt.Errorf("failed to load scenario: %w", err)
 	}
 
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":     session.ID,
+		"scenarioID":    scenario.ID,
+		"scenarioTitle": scenario.Title,
+		"setupSteps":    len(scenario.SetupSteps),
+	}).Info("Initializing scenario for session")
+
+	// Check if scenario has setup steps
+	if len(scenario.SetupSteps) == 0 {
+		sm.logger.WithField("scenarioID", scenario.ID).Debug("No setup steps for scenario")
+		return nil
+	}
+
 	// Create scenario initializer
 	initializer := scenarios.NewScenarioInitializer(sm.clientset, sm.kubevirtClient, sm.logger)
 
-	// Run initialization
-	err = initializer.InitializeScenario(ctx, session, scenario)
+	// Run initialization with timeout
+	initCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	err = initializer.InitializeScenario(initCtx, session, scenario)
 	if err != nil {
 		return fmt.Errorf("scenario initialization failed: %w", err)
 	}
 
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":  session.ID,
+		"scenarioID": scenario.ID,
+	}).Info("Scenario initialization completed")
+
 	return nil
+}
+
+func (sm *SessionManager) GetSessionWithScenario(ctx context.Context, sessionID string) (*models.Session, *models.Scenario, error) {
+	session, err := sm.GetSession(sessionID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if session.ScenarioID == "" {
+		return session, nil, nil
+	}
+
+	scenario, err := sm.loadScenario(ctx, session.ScenarioID)
+	if err != nil {
+		sm.logger.WithError(err).WithField("scenarioID", session.ScenarioID).Warn("Failed to load scenario for session")
+		return session, nil, nil // Return session even if scenario fails to load
+	}
+
+	return session, scenario, nil
 }
 
 // cleanupEnvironment cleans up the Kubernetes resources for a session
