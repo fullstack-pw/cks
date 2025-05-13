@@ -1,5 +1,3 @@
-// Updated client.go implementation to fix build errors
-
 package kubevirt
 
 import (
@@ -16,14 +14,11 @@ import (
 	"text/template"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/remotecommand"
 	"kubevirt.io/client-go/kubecli"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
@@ -440,85 +435,6 @@ func (c *Client) getVMIP(ctx context.Context, namespace, vmName string) string {
 	return ip
 }
 
-func (c *Client) GetVMPodName(ctx context.Context, namespace, vmName string) (string, error) {
-	logrus.WithFields(logrus.Fields{
-		"namespace": namespace,
-		"vmName":    vmName,
-	}).Debug("Getting pod name for VM")
-
-	vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
-	if err != nil {
-		return "", err
-	}
-
-	// The pod name is typically stored in the status
-	if vmi.Status.NodeName != "" {
-		// List pods in the namespace
-		logrus.WithField("labelSelector", fmt.Sprintf("kubevirt.io/domain=%s", vmName)).Debug("Listing pods with label selector")
-
-		pods, err := c.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("kubevirt.io/domain=%s", vmName),
-		})
-		if err != nil {
-			return "", err
-		}
-
-		if len(pods.Items) > 0 {
-			logrus.WithField("podName", pods.Items[0].Name).Debug("Found pod for VM")
-			return pods.Items[0].Name, nil
-		}
-	}
-
-	// If not found with the exact name, try listing all pods
-	logrus.Debug("Pod not found with direct label, listing all pods in namespace")
-	allPods, err := c.kubeClient.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return "", err
-	}
-
-	// Look for a pod that might be related to our VM
-	for _, pod := range allPods.Items {
-		if strings.Contains(pod.Name, "virt-launcher") && strings.Contains(pod.Name, strings.Replace(vmName, "cks-", "", 1)) {
-			logrus.WithField("podName", pod.Name).Info("Found pod with partial match for VM")
-			return pod.Name, nil
-		}
-	}
-
-	return "", fmt.Errorf("no pod found for VM %s", vmName)
-}
-
-// executeCommand executes a command in a pod
-func (c *Client) executeCommand(ctx context.Context, namespace, pod, container string, command []string) (string, string, error) {
-	// Create command execution request
-	req := c.kubeClient.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(pod).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: container,
-			Command:   command,
-			Stdin:     false,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       false,
-		}, scheme.ParameterCodec)
-
-	// Execute command - Use the stored restConfig
-	executor, err := remotecommand.NewSPDYExecutor(c.restConfig, "POST", req.URL())
-	if err != nil {
-		return "", "", err
-	}
-
-	var stdout, stderr strings.Builder
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &stdout,
-		Stderr: &stderr,
-	})
-
-	return stdout.String(), stderr.String(), err
-}
-
 // DeleteVMs deletes VMs and associated resources
 func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...string) error {
 	for _, vmName := range vmNames {
@@ -545,27 +461,39 @@ func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...str
 	return nil
 }
 
-// ExecuteCommandInVM executes a command in a VM
+// ExecuteCommandInVM executes a command in a VM using virtctl SSH
 func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string) (string, error) {
-	pod, err := c.GetVMPodName(ctx, namespace, vmName)
-	if err != nil {
-		return "", err
+	// Use virtctl SSH to execute the command
+	logrus.WithFields(logrus.Fields{
+		"vmName":    vmName,
+		"namespace": namespace,
+		"command":   command,
+	}).Debug("Executing command in VM using virtctl SSH")
+
+	// Create the virtctl ssh command with proper arguments
+	args := []string{
+		"ssh",
+		fmt.Sprintf("vmi/%s", vmName),
+		"-n", namespace,
+		"-l", "suporte", // Default username for our VMs
+		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
+		"--command=" + command,
 	}
 
-	// Split command into args
-	cmdArgs := []string{"/bin/bash", "-c", command}
+	cmd := exec.CommandContext(ctx, "virtctl", args...)
 
-	// Execute as suporte user with sudo if needed
-	stdout, stderr, err := c.executeCommand(ctx, namespace, pod, "compute", cmdArgs)
-	if err != nil {
-		return "", fmt.Errorf("command execution failed: %v, stderr: %s", err, stderr)
+	// Create buffers for stdout and stderr
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute the command
+	if err := cmd.Run(); err != nil {
+		// Read error output
+		return "", fmt.Errorf("command execution failed: %w, output: %s", err, stderr.String())
 	}
 
-	if stderr != "" {
-		return stdout, fmt.Errorf("command returned error: %s", stderr)
-	}
-
-	return stdout, nil
+	return stdout.String(), nil
 }
 
 // substituteEnvVars replaces ${VAR} with the value of the environment variable VAR
@@ -669,64 +597,6 @@ func applyYAML(ctx context.Context, yaml string) error {
 	return nil
 }
 
-// backend/internal/kubevirt/client.go
-
-// Add the following new method to the Client struct:
-
-// ExecuteCommandInVMWithSSH executes a command in a VM using virtctl ssh
-func (c *Client) ExecuteCommandInVMWithSSH(ctx context.Context, namespace, vmName, command string) (string, error) {
-	// Log attempt to execute command
-	logrus.WithFields(logrus.Fields{
-		"vmName":    vmName,
-		"namespace": namespace,
-		"command":   command,
-	}).Debug("Executing command in VM using virtctl ssh")
-
-	// Create a temporary file to store the command output
-	outputFile, err := os.CreateTemp("", "virtctl-ssh-output-")
-	if err != nil {
-		return "", fmt.Errorf("failed to create temp file for output: %w", err)
-	}
-	defer os.Remove(outputFile.Name())
-	defer outputFile.Close()
-
-	// Create the virtctl ssh command with proper arguments
-	args := []string{
-		"ssh",
-		fmt.Sprintf("vmi/%s", vmName),
-		"-n", namespace,
-		"-l", "suporte", // Default username for our VMs
-		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
-		"--command=" + command,
-	}
-
-	cmd := exec.CommandContext(ctx, "virtctl", args...)
-
-	// Set the output to our temp file
-	cmd.Stdout = outputFile
-	cmd.Stderr = outputFile
-
-	// Execute the command
-	if err := cmd.Run(); err != nil {
-		// Read error output from the file
-		outputFile.Seek(0, 0)
-		output, readErr := io.ReadAll(outputFile)
-		if readErr != nil {
-			return "", fmt.Errorf("command failed and could not read error output: %w", err)
-		}
-		return "", fmt.Errorf("command execution failed: %w, output: %s", err, string(output))
-	}
-
-	// Read the output
-	outputFile.Seek(0, 0)
-	output, err := io.ReadAll(outputFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to read command output: %w", err)
-	}
-
-	return string(output), nil
-}
-
 // GetVMStatus gets the status of a VM
 func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (string, error) {
 	vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
@@ -743,23 +613,4 @@ func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (str
 	}
 
 	return "Pending", nil
-}
-
-// GetVMSSHInfo returns the information needed to establish an SSH connection to a VM
-func (c *Client) GetVMSSHInfo(ctx context.Context, namespace, vmName string) (string, int, error) {
-	// Default SSH port
-	sshPort := 22
-
-	// Check if VM exists and is running
-	status, err := c.GetVMStatus(ctx, namespace, vmName)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to get VM status: %w", err)
-	}
-
-	if status != "Running" {
-		return "", 0, fmt.Errorf("VM is not in running state (current: %s)", status)
-	}
-
-	// For virtctl SSH, we'll use the VM name directly since virtctl knows how to resolve it
-	return vmName, sshPort, nil
 }
