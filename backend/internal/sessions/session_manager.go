@@ -24,7 +24,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-// SessionManager handles the creation, management, and cleanup of user sessions
 type SessionManager struct {
 	sessions         map[string]*models.Session
 	lock             sync.RWMutex
@@ -562,9 +561,7 @@ func (sm *SessionManager) setupResourceQuotas(ctx context.Context, namespace str
 
 // loadScenario loads a scenario by ID
 func (sm *SessionManager) loadScenario(ctx context.Context, scenarioID string) (*models.Scenario, error) {
-	// Use scenario manager to load scenario
-	// This is a placeholder - in a real implementation, this would use the scenario manager
-	return nil, nil
+	return sm.scenarioManager.GetScenario(scenarioID)
 }
 
 // Update initializeScenario method

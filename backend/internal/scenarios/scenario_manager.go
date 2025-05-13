@@ -125,45 +125,6 @@ func (sm *ScenarioManager) loadScenarios() error {
 	return nil
 }
 
-func parseSteps(stepLines []string) []string {
-	steps := []string{}
-	for _, line := range stepLines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "1.") || strings.HasPrefix(line, "2.") || strings.HasPrefix(line, "-") {
-			steps = append(steps, line)
-		}
-	}
-	return steps
-}
-
-func parseHints(hintLines []string) []string {
-	hints := []string{}
-	currentHint := ""
-	inHint := false
-
-	for _, line := range hintLines {
-		if strings.Contains(line, "<summary>") {
-			inHint = true
-			// Extract hint title
-			start := strings.Index(line, "<summary>") + 9
-			end := strings.Index(line, "</summary>")
-			if end > start {
-				currentHint = line[start:end]
-			}
-		} else if strings.Contains(line, "</details>") {
-			if currentHint != "" {
-				hints = append(hints, currentHint)
-				currentHint = ""
-			}
-			inHint = false
-		} else if inHint && strings.TrimSpace(line) != "" {
-			currentHint += " " + strings.TrimSpace(line)
-		}
-	}
-
-	return hints
-}
-
 // GetScenario returns a scenario by ID
 func (sm *ScenarioManager) GetScenario(id string) (*models.Scenario, error) {
 	sm.lock.RLock()
@@ -559,4 +520,43 @@ func (sm *ScenarioManager) loadCategories() error {
 	}
 
 	return nil
+}
+
+func parseSteps(stepLines []string) []string {
+	steps := []string{}
+	for _, line := range stepLines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "1.") || strings.HasPrefix(line, "2.") || strings.HasPrefix(line, "-") {
+			steps = append(steps, line)
+		}
+	}
+	return steps
+}
+
+func parseHints(hintLines []string) []string {
+	hints := []string{}
+	currentHint := ""
+	inHint := false
+
+	for _, line := range hintLines {
+		if strings.Contains(line, "<summary>") {
+			inHint = true
+			// Extract hint title
+			start := strings.Index(line, "<summary>") + 9
+			end := strings.Index(line, "</summary>")
+			if end > start {
+				currentHint = line[start:end]
+			}
+		} else if strings.Contains(line, "</details>") {
+			if currentHint != "" {
+				hints = append(hints, currentHint)
+				currentHint = ""
+			}
+			inHint = false
+		} else if inHint && strings.TrimSpace(line) != "" {
+			currentHint += " " + strings.TrimSpace(line)
+		}
+	}
+
+	return hints
 }
