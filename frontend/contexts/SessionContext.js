@@ -126,20 +126,28 @@ export const SessionProvider = ({ children }) => {
             if (result.success) {
                 toast.success('Task completed successfully!');
             } else {
-                toast.warning('Task validation failed');
+                toast.warning(result.message || 'Task validation failed');
             }
 
-            return result;
+            return result; // Always return the result, don't throw
+
         } catch (err) {
-            // Use our error handler to process the error
             const processedError = ErrorHandler.handleError(
                 err,
                 'task:validate',
-                toast.error
+                null // Don't show double toast
             );
 
-            setError(processedError);
-            throw processedError;
+            // Show toast notification
+            toast.error(processedError.message);
+
+            // Return error as result instead of throwing
+            return {
+                success: false,
+                message: processedError.message,
+                details: processedError.details || []
+            };
+
         } finally {
             setLoading(false);
         }

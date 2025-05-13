@@ -3,6 +3,7 @@ import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
+import ValidationProgress from './ValidationProgress';
 
 const TaskPanel = ({ sessionId, scenarioId }) => {
     const { session, validateTask } = useSession(sessionId);
@@ -14,7 +15,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showAllTasks, setShowAllTasks] = useState(false);
-
+    const [validationProgress, setValidationProgress] = useState(null);
     // Fetch scenario data
     useEffect(() => {
         const fetchScenario = async () => {
@@ -45,14 +46,48 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         setValidating(true);
         setValidationResult(null);
 
+        // Set up validation stages for progress tracking
+        const validationStages = [
+            { name: 'Connecting to cluster', message: 'Establishing connection...' },
+            { name: 'Checking resources', message: 'Verifying Kubernetes resources...' },
+            { name: 'Validating configuration', message: 'Checking task requirements...' },
+            { name: 'Final verification', message: 'Completing validation...' }
+        ];
+
+        setValidationProgress({
+            stages: validationStages,
+            currentStage: 0
+        });
+
         try {
+            // Simulate progress through stages (in real app, this would be from WebSocket)
+            const progressInterval = setInterval(() => {
+                setValidationProgress(prev => {
+                    if (!prev || prev.currentStage >= prev.stages.length - 1) {
+                        return prev;
+                    }
+                    return {
+                        ...prev,
+                        currentStage: prev.currentStage + 1
+                    };
+                });
+            }, 1000);
+
             const result = await validateTask(sessionId, taskId);
+
+            clearInterval(progressInterval);
+            setValidationProgress(null);
             setValidationResult(result);
+
+            // Don't throw errors here - handle them gracefully
             return result;
         } catch (err) {
+            // Handle error locally instead of re-throwing
+            setValidationProgress(null);
             setValidationResult({
                 success: false,
-                message: err.message || 'Validation failed due to an unexpected error'
+                message: err.message || 'Validation failed due to an unexpected error',
+                details: []
             });
             console.error('Task validation error:', err);
         } finally {
@@ -203,29 +238,31 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                         <Card
                             className={`mb-6 ${validationResult.success ? 'bg-green-50' : 'bg-red-50'}`}
                         >
-                            <h3 className={`text-sm font-medium mb-2 ${validationResult.success ? 'text-green-800' : 'text-red-800'}`}>
-                                {validationResult.success ? 'Task Completed!' : 'Validation Failed'}
-                            </h3>
-                            <p className={`text-xs sm:text-sm ${validationResult.success ? 'text-green-700' : 'text-red-700'}`}>
-                                {validationResult.message}
-                            </p>
+                            <div className="p-4">
+                                <h3 className={`text-sm font-medium mb-2 ${validationResult.success ? 'text-green-800' : 'text-red-800'
+                                    }`}>
+                                    {validationResult.success ? '✓ Task Completed!' : '✗ Validation Failed'}
+                                </h3>
+                                <p className={`text-sm ${validationResult.success ? 'text-green-700' : 'text-red-700'
+                                    }`}>
+                                    {validationResult.message}
+                                </p>
 
-                            {validationResult.details && validationResult.details.length > 0 && (
-                                <div className="mt-2 border-t border-gray-200 pt-2">
-                                    <h4 className="text-xs font-medium text-gray-500 mb-1">Details</h4>
-                                    <ul className="space-y-1">
-                                        {validationResult.details.map((detail, index) => (
-                                            <li key={index} className={`text-xs sm:text-sm flex items-start ${detail.passed ? 'text-green-700' : 'text-red-700'}`}>
-                                                <StatusIndicator
-                                                    status={detail.passed ? 'completed' : 'failed'}
-                                                    size="sm"
-                                                />
-                                                <span className="ml-2">{detail.message}</span>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                </div>
-                            )}
+                                {validationResult.details && validationResult.details.length > 0 && (
+                                    <div className="mt-3 border-t pt-3">
+                                        <h4 className="text-xs font-medium text-gray-700 mb-2">Details:</h4>
+                                        <ul className="space-y-1">
+                                            {validationResult.details.map((detail, index) => (
+                                                <li key={index} className={`text-xs flex items-start ${detail.passed ? 'text-green-700' : 'text-red-700'
+                                                    }`}>
+                                                    <span className="mr-2">{detail.passed ? '✓' : '✗'}</span>
+                                                    <span>{detail.message}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
+                            </div>
                         </Card>
                     )}
 
@@ -235,10 +272,10 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             variant="primary"
                             onClick={() => handleValidateTask(currentTask.id)}
                             isLoading={validating}
-                            disabled={validating}
+                            disabled={validating || getTaskStatus(currentTask.id) === 'completed'}
                             className="w-full sm:w-auto"
                         >
-                            Validate Task
+                            {validating ? 'Validating...' : 'Validate Task'}
                         </Button>
                     </div>
                 </div>
