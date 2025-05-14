@@ -4,6 +4,8 @@ import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
 import ValidationProgress from './ValidationProgress';
+import ValidationResult from './ValidationResult';
+import ValidationSummary from './ValidationSummary';
 
 const TaskPanel = ({ sessionId, scenarioId }) => {
     const { session, validateTask } = useSession(sessionId);
@@ -83,6 +85,11 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
             clearInterval(progressInterval);
             setValidationProgress(null);
+
+            // Add debug logging
+            console.log('[TaskPanel] Validation result:', result);
+            console.log('[TaskPanel] Validation details:', result.details);
+
             setValidationResult(result);
 
             // Don't throw errors here - handle them gracefully
@@ -90,12 +97,12 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         } catch (err) {
             // Handle error locally instead of re-throwing
             setValidationProgress(null);
+            console.error('[TaskPanel] Validation error:', err);
             setValidationResult({
                 success: false,
                 message: err.message || 'Validation failed due to an unexpected error',
                 details: []
             });
-            console.error('Task validation error:', err);
         } finally {
             setValidating(false);
         }
@@ -195,6 +202,11 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 </div>
             </div>
 
+            {/* Progress summary */}
+            {session && session.tasks && (
+                <ValidationSummary tasks={session.tasks} />
+            )}
+
             {/* Task content */}
             <div className="flex-1 overflow-y-auto">
                 <div className="p-3 sm:p-6">
@@ -238,38 +250,19 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             )}
                         </div>
                     )}
-
+                    {/* Validation progress */}
+                    {validating && validationProgress && (
+                        <ValidationProgress
+                            stages={validationProgress.stages}
+                            currentStage={validationProgress.currentStage}
+                        />
+                    )}
                     {/* Validation results */}
                     {validationResult && (
-                        <Card
-                            className={`mb-6 ${validationResult.success ? 'bg-green-50' : 'bg-red-50'}`}
-                        >
-                            <div className="p-4">
-                                <h3 className={`text-sm font-medium mb-2 ${validationResult.success ? 'text-green-800' : 'text-red-800'
-                                    }`}>
-                                    {validationResult.success ? '✓ Task Completed!' : '✗ Validation Failed'}
-                                </h3>
-                                <p className={`text-sm ${validationResult.success ? 'text-green-700' : 'text-red-700'
-                                    }`}>
-                                    {validationResult.message}
-                                </p>
-
-                                {validationResult.details && validationResult.details.length > 0 && (
-                                    <div className="mt-3 border-t pt-3">
-                                        <h4 className="text-xs font-medium text-gray-700 mb-2">Details:</h4>
-                                        <ul className="space-y-1">
-                                            {validationResult.details.map((detail, index) => (
-                                                <li key={index} className={`text-xs flex items-start ${detail.passed ? 'text-green-700' : 'text-red-700'
-                                                    }`}>
-                                                    <span className="mr-2">{detail.passed ? '✓' : '✗'}</span>
-                                                    <span>{detail.message}</span>
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    </div>
-                                )}
-                            </div>
-                        </Card>
+                        <ValidationResult
+                            result={validationResult}
+                            onRetry={() => handleValidateTask(currentTask.id)}
+                        />
                     )}
 
                     {/* Validation button */}

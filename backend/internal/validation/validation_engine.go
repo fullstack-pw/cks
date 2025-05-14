@@ -29,6 +29,11 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 		Details: []models.ValidationDetail{},
 	}
 
+	logrus.WithFields(logrus.Fields{
+		"taskID":          task.ID,
+		"validationRules": len(task.Validation),
+	}).Info("Starting task validation")
+
 	for _, rule := range task.Validation {
 		detail, err := e.validateRule(ctx, session, rule)
 		if err != nil {
@@ -43,10 +48,26 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 		}
 	}
 
+	// Log the complete validation result
+	logrus.WithFields(logrus.Fields{
+		"taskID":  task.ID,
+		"success": result.Success,
+		"message": result.Message,
+		"details": len(result.Details),
+	}).Info("Task validation completed")
+
+	// Log each detail
+	for i, detail := range result.Details {
+		logrus.WithFields(logrus.Fields{
+			"index":   i,
+			"rule":    detail.Rule,
+			"passed":  detail.Passed,
+			"message": detail.Message,
+		}).Info("Validation detail")
+	}
+
 	return result, nil
 }
-
-// In backend/internal/validation/validation_engine.go, update the validateRule method:
 
 func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
 	detail := models.ValidationDetail{
@@ -83,13 +104,13 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 		detail.Message = fmt.Sprintf("Unknown validation type: %s", rule.Type)
 	}
 
-	// Log the result
+	// Log the complete validation detail
 	logrus.WithFields(logrus.Fields{
 		"ruleID":  rule.ID,
 		"passed":  detail.Passed,
 		"message": detail.Message,
 		"error":   err,
-	}).Debug("Validation rule completed")
+	}).Info("Validation rule completed") // Changed from Debug to Info for visibility
 
 	return detail, err
 }
