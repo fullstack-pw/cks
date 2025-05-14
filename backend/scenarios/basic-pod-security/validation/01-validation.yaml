@@ -1,4 +1,3 @@
-# validation/01-validation.yaml
 validation:
   - id: pod-exists
     type: resource_exists

@@ -293,6 +293,12 @@ func (sm *ScenarioManager) validateScenarioMetadata(scenario *models.Scenario) e
 func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath string) error {
 	tasksDir := filepath.Join(scenarioPath, "tasks")
 
+	sm.logger.WithFields(logrus.Fields{
+		"scenarioID":   scenario.ID,
+		"scenarioPath": scenarioPath,
+		"tasksDir":     tasksDir,
+	}).Info("Loading tasks for scenario")
+
 	entries, err := os.ReadDir(tasksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -305,7 +311,18 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 	// Pattern for task files: 01-task.md, 02-task.md, etc.
 	taskPattern := regexp.MustCompile(`^(\d+)-task\.md$`)
 
+	sm.logger.WithFields(logrus.Fields{
+		"scenarioID":  scenario.ID,
+		"fileCount":   len(entries),
+		"taskPattern": taskPattern.String(),
+	}).Debug("Found entries in tasks directory")
+
 	for _, entry := range entries {
+		sm.logger.WithFields(logrus.Fields{
+			"fileName": entry.Name(),
+			"isDir":    entry.IsDir(),
+		}).Debug("Processing entry")
+
 		if entry.IsDir() || !taskPattern.MatchString(entry.Name()) {
 			continue
 		}
@@ -318,7 +335,7 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 			"scenarioID": scenario.ID,
 			"taskID":     taskID,
 			"fileName":   entry.Name(),
-		}).Debug("Processing task file")
+		}).Info("Processing task file")
 
 		taskPath := filepath.Join(tasksDir, entry.Name())
 
@@ -344,14 +361,21 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 			continue
 		}
 
+		sm.logger.WithFields(logrus.Fields{
+			"taskID":    task.ID,
+			"taskTitle": task.Title,
+		}).Info("Parsed task from markdown")
+
 		// Load validation for this task
 		validationFile := fmt.Sprintf("%s-validation.yaml", taskID)
 		validationPath := filepath.Join(scenarioPath, "validation", validationFile)
 
 		sm.logger.WithFields(logrus.Fields{
-			"taskID":         taskID,
-			"validationPath": validationPath,
-		}).Debug("Loading validation rules")
+			"taskID":           taskID,
+			"validationPath":   validationPath,
+			"validationFile":   validationFile,
+			"validationExists": fileExists(validationPath),
+		}).Info("Looking for validation file")
 
 		if err := sm.loadValidationRules(&task, validationPath); err != nil {
 			sm.logger.WithError(err).Warnf("Failed to load validation for task %s", taskID)
@@ -384,16 +408,28 @@ func (sm *ScenarioManager) loadTasks(scenario *models.Scenario, scenarioPath str
 			"taskID":          task.ID,
 			"taskTitle":       task.Title,
 			"validationCount": len(task.Validation),
-		}).Debug("Final task loaded")
+		}).Info("Final task loaded")
 	}
 
 	return nil
 }
 
+// Helper function to check if file exists
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 // loadValidationRules loads validation rules for a task
 func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath string) error {
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":         task.ID,
+		"validationPath": validationPath,
+	}).Debug("Starting to load validation rules")
+
 	// Check if validation file exists
-	if _, err := os.Stat(validationPath); os.IsNotExist(err) {
+	fileInfo, err := os.Stat(validationPath)
+	if os.IsNotExist(err) {
 		sm.logger.WithFields(logrus.Fields{
 			"taskID": task.ID,
 			"path":   validationPath,
@@ -401,22 +437,36 @@ func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath
 		return nil // Not an error, validation is optional
 	}
 
+	if err != nil {
+		sm.logger.WithError(err).WithField("path", validationPath).Error("Error checking validation file")
+		return NewIOError("stat validation", validationPath, err)
+	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":   task.ID,
+		"path":     validationPath,
+		"fileSize": fileInfo.Size(),
+	}).Info("Validation file found")
+
 	// Open file with proper resource management
 	validationFile, err := os.Open(validationPath)
 	if err != nil {
+		sm.logger.WithError(err).WithField("path", validationPath).Error("Failed to open validation file")
 		return NewIOError("open validation", validationPath, err)
 	}
 	defer validationFile.Close()
 
 	validationContent, err := io.ReadAll(validationFile)
 	if err != nil {
+		sm.logger.WithError(err).WithField("path", validationPath).Error("Failed to read validation file")
 		return NewIOError("read validation", validationPath, err)
 	}
 
 	// Log the content for debugging
 	sm.logger.WithFields(logrus.Fields{
-		"taskID":  task.ID,
-		"content": string(validationContent),
+		"taskID":        task.ID,
+		"contentLength": len(validationContent),
+		"content":       string(validationContent),
 	}).Debug("Read validation content")
 
 	// Parse validation YAML
@@ -424,9 +474,21 @@ func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath
 		Validation []models.ValidationRule `yaml:"validation"`
 	}
 
+	// Try to unmarshal with detailed error logging
 	if err := yaml.Unmarshal(validationContent, &validation); err != nil {
+		sm.logger.WithError(err).WithFields(logrus.Fields{
+			"taskID":  task.ID,
+			"content": string(validationContent),
+		}).Error("Failed to parse validation YAML")
 		return NewScenarioInvalidError(task.ID, fmt.Sprintf("invalid validation YAML: %v", err))
 	}
+
+	// Log the parsed structure
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":         task.ID,
+		"parsedRules":    len(validation.Validation),
+		"validationData": fmt.Sprintf("%+v", validation),
+	}).Info("Parsed validation structure")
 
 	// Ensure validation rules have been parsed
 	if len(validation.Validation) == 0 {
@@ -438,7 +500,14 @@ func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath
 		}).Info("Successfully loaded validation rules")
 	}
 
+	// Assign the validation rules to the task
 	task.Validation = validation.Validation
+
+	// Verify assignment
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":            task.ID,
+		"assignedRuleCount": len(task.Validation),
+	}).Info("Validation rules assigned to task")
 
 	// Log each rule for debugging
 	for i, rule := range task.Validation {
@@ -447,8 +516,19 @@ func (sm *ScenarioManager) loadValidationRules(task *models.Task, validationPath
 			"ruleIndex": i,
 			"ruleID":    rule.ID,
 			"ruleType":  rule.Type,
-		}).Debug("Loaded validation rule")
+			"resource":  fmt.Sprintf("%+v", rule.Resource),
+			"command":   fmt.Sprintf("%+v", rule.Command),
+			"script":    fmt.Sprintf("%+v", rule.Script),
+			"file":      fmt.Sprintf("%+v", rule.File),
+		}).Debug("Loaded validation rule details")
 	}
+
+	// Double-check task has the rules
+	sm.logger.WithFields(logrus.Fields{
+		"taskID":              task.ID,
+		"taskValidationCount": len(task.Validation),
+		"taskAddress":         fmt.Sprintf("%p", task),
+	}).Info("Final validation state on task")
 
 	return nil
 }

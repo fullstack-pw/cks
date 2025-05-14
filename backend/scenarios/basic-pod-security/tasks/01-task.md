@@ -1,5 +1,3 @@
-# Task File Format (tasks/01-task.md)
-
 # Task 1: Configure a Pod with Security Context
 
 ## Description
@@ -59,19 +57,21 @@ kubectl get pod secure-pod -o yaml | grep -A 10 securityContext
 
 ## Hints
 <details>
-<summary>Hint 1: Security Context Levels</summary>
-Remember that security contexts can be applied at both the Pod level and at the container level. Pod-level settings apply to all containers, while container-level settings override Pod-level settings.
+Hint 1: Security Context Levels
 </details>
-<details>
 <summary>
-
-## Hint 2: Checking User ID
+Remember that security contexts can be applied at both the Pod level and at the container level. Pod-level settings apply to all containers, while container-level settings override Pod-level settings.
 </summary>
+
+<details>
+Hint 2: Checking User ID
+</details>
+<summary>
 You can verify the user ID by executing a command in the container:
 ```bash
 kubectl exec secure-pod -- id
 ```
-</details>
+</summary>
 
 ## Validation Criteria
 

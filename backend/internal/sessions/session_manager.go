@@ -296,7 +296,7 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 
 	// Find task in scenario
 	var taskToValidate *models.Task
-	for _, task := range scenario.Tasks {
+	for i, task := range scenario.Tasks {
 		sm.logger.WithFields(logrus.Fields{
 			"checkingTaskID": task.ID,
 			"targetTaskID":   taskID,
@@ -304,7 +304,7 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		}).Debug("Comparing task IDs")
 
 		if task.ID == taskID {
-			taskToValidate = &task
+			taskToValidate = &scenario.Tasks[i]
 			break
 		}
 	}
