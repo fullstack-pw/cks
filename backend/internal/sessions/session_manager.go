@@ -96,7 +96,33 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 				ID:     task.ID,
 				Status: "pending",
 			})
+
+			// Add detailed logging for each task
+			sm.logger.WithFields(logrus.Fields{
+				"sessionID":       sessionID,
+				"taskID":          task.ID,
+				"taskTitle":       task.Title,
+				"validationCount": len(task.Validation),
+			}).Debug("Initialized task with validation rules")
 		}
+
+		sm.logger.WithFields(logrus.Fields{
+			"sessionID":     sessionID,
+			"scenarioID":    scenarioID,
+			"scenarioTitle": scenarioTitle,
+			"taskCount":     len(tasks),
+			"tasksDetailed": func() []map[string]interface{} {
+				details := make([]map[string]interface{}, len(scenario.Tasks))
+				for i, t := range scenario.Tasks {
+					details[i] = map[string]interface{}{
+						"id":              t.ID,
+						"title":           t.Title,
+						"validationCount": len(t.Validation),
+					}
+				}
+				return details
+			}(),
+		}).Info("Initialized session with scenario tasks")
 
 		sm.logger.WithFields(logrus.Fields{
 			"sessionID":     sessionID,
@@ -292,19 +318,46 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 	sm.logger.WithFields(logrus.Fields{
 		"scenarioID": scenario.ID,
 		"taskCount":  len(scenario.Tasks),
-	}).Debug("Loaded scenario for validation")
+		"tasks": func() []map[string]interface{} {
+			taskInfo := make([]map[string]interface{}, len(scenario.Tasks))
+			for i, t := range scenario.Tasks {
+				taskInfo[i] = map[string]interface{}{
+					"id":              t.ID,
+					"title":           t.Title,
+					"validationCount": len(t.Validation),
+				}
+			}
+			return taskInfo
+		}(),
+	}).Debug("Loaded scenario for validation with task details")
 
 	// Find task in scenario
 	var taskToValidate *models.Task
 	for i, task := range scenario.Tasks {
 		sm.logger.WithFields(logrus.Fields{
-			"checkingTaskID": task.ID,
-			"targetTaskID":   taskID,
-			"match":          task.ID == taskID,
-		}).Debug("Comparing task IDs")
+			"checkingTaskID":  task.ID,
+			"targetTaskID":    taskID,
+			"taskTitle":       task.Title,
+			"validationCount": len(task.Validation),
+			"match":           task.ID == taskID,
+		}).Debug("Checking task match")
 
 		if task.ID == taskID {
 			taskToValidate = &scenario.Tasks[i]
+			sm.logger.WithFields(logrus.Fields{
+				"taskID":    taskID,
+				"foundTask": true,
+				"validationRules": func() []map[string]interface{} {
+					rules := make([]map[string]interface{}, len(task.Validation))
+					for j, rule := range task.Validation {
+						rules[j] = map[string]interface{}{
+							"id":   rule.ID,
+							"type": rule.Type,
+						}
+					}
+					return rules
+				}(),
+			}).Debug("Found task with validation rules")
 			break
 		}
 	}
