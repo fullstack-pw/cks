@@ -87,6 +87,21 @@ func (sm *ScenarioManager) GetScenario(id string) (*models.Scenario, error) {
 	// Return a copy to prevent external modifications
 	scenarioCopy := *scenario
 
+	sm.logger.WithFields(logrus.Fields{
+		"scenarioID":  id,
+		"hasScenario": scenario != nil,
+		"taskCount":   len(scenario.Tasks),
+		"tasksWithValidation": func() []string {
+			tasksWithVal := []string{}
+			for _, t := range scenario.Tasks {
+				if len(t.Validation) > 0 {
+					tasksWithVal = append(tasksWithVal, fmt.Sprintf("%s:%d", t.ID, len(t.Validation)))
+				}
+			}
+			return tasksWithVal
+		}(),
+	}).Debug("Scenario retrieved from cache with validation status")
+
 	// Deep copy the tasks with validation rules
 	scenarioCopy.Tasks = make([]models.Task, len(scenario.Tasks))
 	for i, task := range scenario.Tasks {

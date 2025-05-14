@@ -234,20 +234,44 @@ func (e *Engine) validateScript(ctx context.Context, session *models.Session, ru
 		return detail, nil
 	}
 
-	// Execute script
-	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, scriptFile)
+	// Execute script and check exit code
+	scriptCmd := fmt.Sprintf("%s; echo $?", scriptFile)
+	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, scriptCmd)
 
 	// Cleanup
 	e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, fmt.Sprintf("rm %s", scriptFile))
 
-	// Check exit code (this would need enhancement in ExecuteCommandInVM to return exit codes)
 	if err != nil {
-		detail.Message = fmt.Sprintf("%s: %s", rule.ErrorMessage, strings.TrimSpace(output))
+		detail.Message = fmt.Sprintf("%s: command execution failed: %v", rule.ErrorMessage, err)
 		return detail, nil
 	}
 
-	detail.Passed = true
-	detail.Message = "Script validation passed"
+	// Extract exit code from output
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) == 0 {
+		detail.Message = "Failed to get script exit code"
+		return detail, nil
+	}
+
+	exitCodeStr := lines[len(lines)-1]
+	exitCode, err := strconv.Atoi(exitCodeStr)
+	if err != nil {
+		detail.Message = fmt.Sprintf("Failed to parse exit code: %v", err)
+		return detail, nil
+	}
+
+	// Check if exit code matches expected
+	expectedCode := 0
+	if rule.Script.SuccessCode != 0 {
+		expectedCode = rule.Script.SuccessCode
+	}
+
+	if exitCode == expectedCode {
+		detail.Passed = true
+		detail.Message = "Script validation passed"
+	} else {
+		detail.Message = fmt.Sprintf("%s: exit code %d, expected %d", rule.ErrorMessage, exitCode, expectedCode)
+	}
 
 	return detail, nil
 }
