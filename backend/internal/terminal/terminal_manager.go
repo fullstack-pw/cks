@@ -210,8 +210,8 @@ func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Sess
 		"ssh",
 		fmt.Sprintf("vmi/%s", session.Target),
 		"-n", session.Namespace,
-		"--username=suporte",
-		"--known-hosts=/dev/null",
+		"-l", "suporte",
+		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
 	}
 
 	// Log the exact command being executed

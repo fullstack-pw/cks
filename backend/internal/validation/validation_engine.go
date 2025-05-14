@@ -9,6 +9,7 @@ import (
 
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/models"
+	"github.com/sirupsen/logrus"
 )
 
 type Engine struct {
@@ -45,6 +46,8 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 	return result, nil
 }
 
+// In backend/internal/validation/validation_engine.go, update the validateRule method:
+
 func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
 	detail := models.ValidationDetail{
 		Rule:    rule.ID,
@@ -53,6 +56,15 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 	}
 
 	var err error
+
+	// Add logging to track rule execution
+	logrus.WithFields(logrus.Fields{
+		"ruleID":   rule.ID,
+		"ruleType": rule.Type,
+		"resource": rule.Resource,
+		"command":  rule.Command,
+		"script":   rule.Script,
+	}).Debug("Starting validation rule execution")
 
 	switch rule.Type {
 	case "resource_exists":
@@ -71,10 +83,24 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 		detail.Message = fmt.Sprintf("Unknown validation type: %s", rule.Type)
 	}
 
+	// Log the result
+	logrus.WithFields(logrus.Fields{
+		"ruleID":  rule.ID,
+		"passed":  detail.Passed,
+		"message": detail.Message,
+		"error":   err,
+	}).Debug("Validation rule completed")
+
 	return detail, err
 }
 
 func (e *Engine) validateResourceExists(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
+	logrus.WithFields(logrus.Fields{
+		"ruleID":  rule.ID,
+		"session": session.ID,
+		"rule":    fmt.Sprintf("%+v", rule),
+	}).Debug("Starting validateResourceExists")
+
 	detail := models.ValidationDetail{
 		Rule:   rule.ID,
 		Passed: false,
@@ -82,6 +108,7 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 
 	if rule.Resource == nil {
 		detail.Message = "Invalid resource specification"
+		logrus.WithField("ruleID", rule.ID).Debug("Resource is nil")
 		return detail, nil
 	}
 
@@ -96,15 +123,37 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 		rule.Resource.Name,
 		namespace)
 
+	logrus.WithFields(logrus.Fields{
+		"command":   cmd,
+		"namespace": session.Namespace,
+		"targetVM":  session.ControlPlaneVM,
+	}).Debug("Executing kubectl command")
+
 	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, session.ControlPlaneVM, cmd)
+
+	logrus.WithFields(logrus.Fields{
+		"output": output,
+		"error":  err,
+	}).Debug("Command execution result")
+
 	if err != nil || strings.Contains(output, "NotFound") || strings.Contains(output, "Error") {
 		detail.Message = rule.ErrorMessage
+		logrus.WithFields(logrus.Fields{
+			"ruleID":  rule.ID,
+			"message": detail.Message,
+		}).Debug("Resource check failed")
 		return detail, nil
 	}
 
 	detail.Passed = true
 	detail.Message = fmt.Sprintf("%s '%s' exists in namespace '%s'",
 		rule.Resource.Kind, rule.Resource.Name, namespace)
+
+	logrus.WithFields(logrus.Fields{
+		"ruleID":  rule.ID,
+		"passed":  detail.Passed,
+		"message": detail.Message,
+	}).Debug("Resource check passed")
 
 	return detail, nil
 }
@@ -277,6 +326,11 @@ func (e *Engine) validateScript(ctx context.Context, session *models.Session, ru
 }
 
 func (e *Engine) validateCommand(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
+	logrus.WithFields(logrus.Fields{
+		"ruleID":  rule.ID,
+		"command": rule.Command,
+	}).Debug("Starting validateCommand")
+
 	detail := models.ValidationDetail{
 		Rule:   rule.ID,
 		Passed: false,
@@ -284,6 +338,7 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 
 	if rule.Command == nil {
 		detail.Message = "Invalid command specification"
+		logrus.WithField("ruleID", rule.ID).Debug("Command is nil")
 		return detail, nil
 	}
 
@@ -293,8 +348,20 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 		target = session.WorkerNodeVM
 	}
 
+	logrus.WithFields(logrus.Fields{
+		"target":    target,
+		"command":   rule.Command.Command,
+		"sessionNS": session.Namespace,
+	}).Debug("Executing command on target VM")
+
 	// Execute command
 	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, rule.Command.Command)
+
+	logrus.WithFields(logrus.Fields{
+		"output": output,
+		"error":  err,
+		"ruleID": rule.ID,
+	}).Debug("Command execution completed")
 
 	// Check condition
 	switch rule.Condition {
@@ -308,11 +375,17 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 
 	case "output_equals":
 		expectedOutput := fmt.Sprintf("%v", rule.Value)
-		if err == nil && strings.TrimSpace(output) == strings.TrimSpace(expectedOutput) {
+		actualOutput := strings.TrimSpace(output)
+		logrus.WithFields(logrus.Fields{
+			"expected": expectedOutput,
+			"actual":   actualOutput,
+		}).Debug("Comparing output")
+
+		if err == nil && actualOutput == strings.TrimSpace(expectedOutput) {
 			detail.Passed = true
 			detail.Message = "Command output matches expected value"
 		} else {
-			detail.Message = fmt.Sprintf("%s: expected '%s', got '%s'", rule.ErrorMessage, expectedOutput, output)
+			detail.Message = fmt.Sprintf("%s: expected '%s', got '%s'", rule.ErrorMessage, expectedOutput, actualOutput)
 		}
 
 	case "output_contains":
@@ -327,6 +400,12 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 	default:
 		detail.Message = fmt.Sprintf("Unknown condition: %s", rule.Condition)
 	}
+
+	logrus.WithFields(logrus.Fields{
+		"ruleID":  rule.ID,
+		"passed":  detail.Passed,
+		"message": detail.Message,
+	}).Debug("Command validation completed")
 
 	return detail, nil
 }

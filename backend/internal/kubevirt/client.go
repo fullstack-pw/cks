@@ -461,24 +461,36 @@ func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...str
 	return nil
 }
 
-// ExecuteCommandInVM executes a command in a VM using virtctl SSH
 func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string) (string, error) {
-	// Use virtctl SSH to execute the command
 	logrus.WithFields(logrus.Fields{
 		"vmName":    vmName,
 		"namespace": namespace,
 		"command":   command,
 	}).Debug("Executing command in VM using virtctl SSH")
 
+	// Adjust the VM name to match the actual name pattern
+	actualVMName := vmName
+	if strings.HasPrefix(vmName, "cks-") && strings.Contains(vmName, namespace) {
+		// VM name already includes the namespace pattern
+		actualVMName = vmName
+	} else if strings.HasPrefix(vmName, "cks-") {
+		// Need to append namespace pattern
+		actualVMName = fmt.Sprintf("%s-%s", vmName, namespace)
+	}
+
+	logrus.WithField("actualVMName", actualVMName).Debug("Adjusted VM name for command execution")
+
 	// Create the virtctl ssh command with proper arguments
 	args := []string{
 		"ssh",
 		fmt.Sprintf("vmi/%s", vmName),
 		"-n", namespace,
-		"-l", "suporte", // Default username for our VMs
+		"-l", "suporte",
 		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
 		"--command=" + command,
 	}
+
+	logrus.WithField("virtctlArgs", args).Debug("Virtctl command arguments")
 
 	cmd := exec.CommandContext(ctx, "virtctl", args...)
 
@@ -490,8 +502,17 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 	// Execute the command
 	if err := cmd.Run(); err != nil {
 		// Read error output
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"stderr": stderr.String(),
+			"stdout": stdout.String(),
+		}).Debug("Command execution failed")
 		return "", fmt.Errorf("command execution failed: %w, output: %s", err, stderr.String())
 	}
+
+	logrus.WithFields(logrus.Fields{
+		"stdout": stdout.String(),
+		"vmName": actualVMName,
+	}).Debug("Command executed successfully")
 
 	return stdout.String(), nil
 }
