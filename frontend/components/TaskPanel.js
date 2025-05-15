@@ -128,6 +128,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
     // Handle task validation
     const handleValidateTask = useCallback(async (taskId) => {
+        console.log('[TaskPanel] Starting validation for task:', taskId);
         if (event) {
             event.preventDefault();
             event.stopPropagation();
@@ -149,6 +150,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         });
 
         try {
+            console.log('[TaskPanel] Calling validateTask with:', { sessionId, taskId });
             // Simulate progress through stages (in real app, this would be from WebSocket)
             const progressInterval = setInterval(() => {
                 setValidationProgress(prev => {
@@ -163,6 +165,9 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             }, 1000);
 
             const result = await validateTask(sessionId, taskId);
+
+            console.log('[TaskPanel] Validation result:', result);
+            console.log('[TaskPanel] Validation details:', result.details);
 
             clearInterval(progressInterval);
             setValidationProgress(null);

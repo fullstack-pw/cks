@@ -43,14 +43,12 @@ const TerminalContainer = ({ sessionId }) => {
 
         const checkSessionStatus = async () => {
             try {
-                if (!isMounted.current) return; // Don't update if unmounted
-
+                // Remove the mount check that prevents state updates
                 setSessionStatus(prev => ({ ...prev, isLoading: true, error: null }));
 
                 const session = await api.sessions.get(sessionId);
 
-                if (!isMounted.current) return; // Check again after async call
-
+                // Allow state updates even after async operations
                 if (session.status === 'running') {
                     setSessionStatus({
                         isReady: true,
@@ -70,8 +68,10 @@ const TerminalContainer = ({ sessionId }) => {
                     });
 
                     // Poll every 15 seconds
-                    const timeoutId = setTimeout(checkSessionStatus, 15000);
-                    return () => clearTimeout(timeoutId);
+                    if (isMounted.current) { // Only check mount status for recursive calls
+                        const timeoutId = setTimeout(checkSessionStatus, 15000);
+                        return () => clearTimeout(timeoutId);
+                    }
                 } else if (session.status === 'failed') {
                     setSessionStatus({
                         isReady: false,
@@ -88,8 +88,6 @@ const TerminalContainer = ({ sessionId }) => {
                     });
                 }
             } catch (error) {
-                if (!isMounted.current) return;
-
                 setSessionStatus({
                     isReady: false,
                     isLoading: false,
