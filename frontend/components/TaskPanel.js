@@ -18,6 +18,34 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [error, setError] = useState(null);
     const [showAllTasks, setShowAllTasks] = useState(false);
     const [validationProgress, setValidationProgress] = useState(null);
+    const [validationRules, setValidationRules] = useState(null);
+    const [showObjectives, setShowObjectives] = useState(false);
+
+    const getValidationObjectiveDescription = (rule) => {
+        switch (rule.type) {
+            case 'resource_exists':
+                return `${rule.resource.kind} "${rule.resource.name}" must exist in namespace "${rule.resource.namespace || 'default'}"`;
+
+            case 'resource_property':
+                return `${rule.resource.kind} "${rule.resource.name}" property ${rule.resource.property} must ${rule.condition} ${rule.value}`;
+
+            case 'command':
+                return `Command must ${rule.condition === 'success' ? 'execute successfully' : `have output that ${rule.condition} "${rule.value}"`}`;
+
+            case 'script':
+                return `Custom validation script must pass`;
+
+            case 'file_exists':
+                return `File "${rule.file.path}" must exist on ${rule.file.target}`;
+
+            case 'file_content':
+                return `File "${rule.file.path}" must ${rule.condition} "${rule.value}"`;
+
+            default:
+                return rule.description || rule.errorMessage || 'Custom validation';
+        }
+    };
+
     // Fetch scenario data
     useEffect(() => {
         const fetchScenario = async () => {
@@ -42,6 +70,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
         fetchScenario();
     }, [scenarioId]);
+
 
     // Handle task validation
     const handleValidateTask = async (taskId) => {
@@ -158,6 +187,56 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
     const currentTask = tasks[activeTaskIndex];
 
+    useEffect(() => {
+        const fetchValidationRules = async () => {
+            if (!scenario || !currentTask) return;
+
+            try {
+                // For now, we'll extract validation info from the scenario data
+                // since the API endpoint might not exist yet
+                const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
+                if (taskFromScenario && taskFromScenario.validation) {
+                    setValidationRules(taskFromScenario.validation);
+                }
+            } catch (err) {
+                console.error('Error fetching validation rules:', err);
+            }
+        };
+
+        fetchValidationRules();
+    }, [currentTask, scenario]);
+
+    const ValidationObjectives = ({ rules }) => {
+        if (!rules || rules.length === 0) return null;
+
+        return (
+            <Card className="mb-6 border-blue-200 bg-blue-50">
+                <div className="p-4">
+                    <h3 className="text-sm font-medium text-blue-900 mb-3">
+                        Validation Objectives ({rules.length} checks)
+                    </h3>
+                    <div className="space-y-2">
+                        {rules.map((rule, index) => (
+                            <div key={rule.id} className="flex items-start">
+                                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center mr-3">
+                                    <span className="text-xs font-medium text-blue-800">{index + 1}</span>
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-sm text-blue-800 font-medium">
+                                        {getValidationObjectiveDescription(rule)}
+                                    </p>
+                                    {rule.description && (
+                                        <p className="text-xs text-blue-600 mt-1">{rule.description}</p>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </Card>
+        );
+    };
+
     return (
         <div className="flex flex-col h-full bg-white">
             {/* Mobile toggle for task list */}
@@ -265,7 +344,25 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             scenarioId={scenarioId}
                         />
                     )}
+                    {validationRules && validationRules.length > 0 && (
+                        <div className="mb-6">
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setShowObjectives(!showObjectives)}
+                                className="mb-3"
+                            >
+                                {showObjectives ? 'Hide Validation Objectives' : 'Show Validation Objectives'}
+                                <span className="ml-1 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
+                                    {validationRules.length}
+                                </span>
+                            </Button>
 
+                            {showObjectives && (
+                                <ValidationObjectives rules={validationRules} />
+                            )}
+                        </div>
+                    )}
                     {/* Validation button */}
                     <div className="pt-4">
                         <Button

@@ -253,7 +253,8 @@ class ApiClient {
          */
         validate: (sessionId, taskId) => this.fetchWithRetry(`/sessions/${sessionId}/tasks/${taskId}/validate`, {
             method: 'POST'
-        }, 1, 60000) // Longer timeout for validation (60s) with 1 retry
+        }, 1, 60000), // Longer timeout for validation (60s) with 1 retry
+        getValidationRules: (scenarioId, taskId) => this.fetchWithRetry(`/scenarios/${scenarioId}/tasks/${taskId}/validation`),
     };
 }
 
