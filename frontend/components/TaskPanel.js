@@ -46,6 +46,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         }
     };
 
+    // Hooks
     // Fetch scenario data
     useEffect(() => {
         const fetchScenario = async () => {
@@ -71,6 +72,59 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         fetchScenario();
     }, [scenarioId]);
 
+    useEffect(() => {
+        const fetchValidationRules = async () => {
+            if (!scenario || !scenario.tasks || scenario.tasks.length === 0) return;
+
+            const currentTask = scenario.tasks[activeTaskIndex];
+            if (!currentTask) return;
+
+            try {
+                // Extract validation info from the scenario data
+                const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
+                if (taskFromScenario && taskFromScenario.validation) {
+                    setValidationRules(taskFromScenario.validation);
+                    console.log('Validation rules:', taskFromScenario.validation);
+                }
+            } catch (err) {
+                console.error('Error fetching validation rules:', err);
+            }
+        };
+
+        fetchValidationRules();
+    }, [activeTaskIndex, scenario]);
+
+    //Helper functions
+    const ValidationObjectives = ({ rules }) => {
+        if (!rules || rules.length === 0) return null;
+
+        return (
+            <Card className="mb-6 border-blue-200 bg-blue-50">
+                <div className="p-4">
+                    <h3 className="text-sm font-medium text-blue-900 mb-3">
+                        Validation Objectives ({rules.length} checks)
+                    </h3>
+                    <div className="space-y-2">
+                        {rules.map((rule, index) => (
+                            <div key={rule.id} className="flex items-start">
+                                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center mr-3">
+                                    <span className="text-xs font-medium text-blue-800">{index + 1}</span>
+                                </div>
+                                <div className="flex-1">
+                                    <p className="text-sm text-blue-800 font-medium">
+                                        {getValidationObjectiveDescription(rule)}
+                                    </p>
+                                    {rule.description && (
+                                        <p className="text-xs text-blue-600 mt-1">{rule.description}</p>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </Card>
+        );
+    };
 
     // Handle task validation
     const handleValidateTask = async (taskId) => {
@@ -186,56 +240,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     }
 
     const currentTask = tasks[activeTaskIndex];
-
-    useEffect(() => {
-        const fetchValidationRules = async () => {
-            if (!scenario || !currentTask) return;
-
-            try {
-                // For now, we'll extract validation info from the scenario data
-                // since the API endpoint might not exist yet
-                const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
-                if (taskFromScenario && taskFromScenario.validation) {
-                    setValidationRules(taskFromScenario.validation);
-                }
-            } catch (err) {
-                console.error('Error fetching validation rules:', err);
-            }
-        };
-
-        fetchValidationRules();
-    }, [currentTask, scenario]);
-
-    const ValidationObjectives = ({ rules }) => {
-        if (!rules || rules.length === 0) return null;
-
-        return (
-            <Card className="mb-6 border-blue-200 bg-blue-50">
-                <div className="p-4">
-                    <h3 className="text-sm font-medium text-blue-900 mb-3">
-                        Validation Objectives ({rules.length} checks)
-                    </h3>
-                    <div className="space-y-2">
-                        {rules.map((rule, index) => (
-                            <div key={rule.id} className="flex items-start">
-                                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center mr-3">
-                                    <span className="text-xs font-medium text-blue-800">{index + 1}</span>
-                                </div>
-                                <div className="flex-1">
-                                    <p className="text-sm text-blue-800 font-medium">
-                                        {getValidationObjectiveDescription(rule)}
-                                    </p>
-                                    {rule.description && (
-                                        <p className="text-xs text-blue-600 mt-1">{rule.description}</p>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </Card>
-        );
-    };
 
     return (
         <div className="flex flex-col h-full bg-white">
