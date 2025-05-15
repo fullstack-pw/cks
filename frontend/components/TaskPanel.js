@@ -1,5 +1,5 @@
 // frontend/components/TaskPanel.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
@@ -127,8 +127,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     };
 
     // Handle task validation
-    const handleValidateTask = async (taskId) => {
-        // Prevent any default behavior or propagation
+    const handleValidateTask = useCallback(async (taskId) => {
         if (event) {
             event.preventDefault();
             event.stopPropagation();
@@ -136,7 +135,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
         setValidating(true);
         setValidationResult(null);
-
         // Set up validation stages for progress tracking
         const validationStages = [
             { name: 'Connecting to cluster', message: 'Establishing connection...' },
@@ -189,7 +187,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         } finally {
             setValidating(false);
         }
-    };
+    }, [sessionId, validateTask]);
 
     // Toggle hint visibility
     const toggleHint = (taskId) => {

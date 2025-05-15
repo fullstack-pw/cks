@@ -1,6 +1,6 @@
 // frontend/contexts/SessionContext.js (enhanced error handling)
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { mutate } from 'swr';
 import { useToast } from './ToastContext';
@@ -114,29 +114,21 @@ export const SessionProvider = ({ children }) => {
     };
 
     // Validate a task with enhanced error handling
-    const validateTask = async (sessionId, taskId) => {
+    const validateTask = useCallback(async (sessionId, taskId) => {
         setLoading(true);
         setError(null);
 
-        console.log('[Validation] Starting validation for task:', taskId, 'in session:', sessionId);
-
         try {
             const result = await api.tasks.validate(sessionId, taskId);
-            console.log('[Validation] Result:', result);
 
-            // Revalidate to get updated session data
-            mutate(`/sessions/${sessionId}`);
-
+            // Only trigger a session refresh if validation succeeded
             if (result.success) {
-                toast.success('Task completed successfully!');
-            } else {
-                toast.warning(result.message || 'Task validation failed');
+                // Use non-blocking refresh to avoid UI freezes
+                mutate(`/sessions/${sessionId}`, undefined, false);
             }
 
             return result;
-
         } catch (err) {
-            console.error('[Validation] Error:', err);
             const processedError = ErrorHandler.handleError(
                 err,
                 'task:validate',
@@ -150,11 +142,10 @@ export const SessionProvider = ({ children }) => {
                 message: processedError.message,
                 details: processedError.details || []
             };
-
         } finally {
             setLoading(false);
         }
-    };
+    }, [toast]);
 
     // Create a terminal session with enhanced error handling
     const createTerminal = async (sessionId, target) => {
@@ -180,23 +171,17 @@ export const SessionProvider = ({ children }) => {
         setError(null);
     };
 
-    // The context value
-    const value = {
-        // State
+    const value = useMemo(() => ({
         loading,
         error,
-
-        // Actions
         createSession,
         deleteSession,
         extendSession,
         validateTask,
         createTerminal,
         clearError,
-
-        // Helper for components to use SWR directly
         fetcher
-    };
+    }), [loading, error, createSession, deleteSession, extendSession, validateTask, createTerminal, clearError, fetcher]);
 
     return (
         <SessionContext.Provider value={value}>

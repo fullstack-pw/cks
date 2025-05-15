@@ -1,5 +1,5 @@
 // frontend/components/TerminalContainer.js
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Terminal from './Terminal';
 import api from '../lib/api';
 import { Button, LoadingState, ErrorState, StatusIndicator } from './common';
@@ -27,15 +27,29 @@ const TerminalContainer = ({ sessionId }) => {
         error: null
     });
 
+    // Keep a ref to track component mount status
+    const isMounted = useRef(true);
+
+    // Effect to track mount/unmount
+    useEffect(() => {
+        return () => {
+            isMounted.current = false;
+        };
+    }, []);
+
     // Poll for session status changes
     useEffect(() => {
         if (!sessionId) return;
 
         const checkSessionStatus = async () => {
             try {
+                if (!isMounted.current) return; // Don't update if unmounted
+
                 setSessionStatus(prev => ({ ...prev, isLoading: true, error: null }));
 
                 const session = await api.sessions.get(sessionId);
+
+                if (!isMounted.current) return; // Check again after async call
 
                 if (session.status === 'running') {
                     setSessionStatus({
@@ -74,7 +88,8 @@ const TerminalContainer = ({ sessionId }) => {
                     });
                 }
             } catch (error) {
-                console.error('Failed to check session status:', error);
+                if (!isMounted.current) return;
+
                 setSessionStatus({
                     isReady: false,
                     isLoading: false,
@@ -266,4 +281,4 @@ const TerminalContainer = ({ sessionId }) => {
     );
 };
 
-export default TerminalContainer;
+export default React.memo(TerminalContainer);

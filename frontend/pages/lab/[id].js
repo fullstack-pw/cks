@@ -1,6 +1,6 @@
 // frontend/pages/lab/[id].js
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import TerminalContainer from '../../components/TerminalContainer';
@@ -61,6 +61,16 @@ export default function LabPage() {
             }
         }
     };
+
+    // Memoize the terminal props to prevent unnecessary re-renders
+    const terminalProps = useMemo(() => ({
+        sessionId: id
+    }), [id]);
+
+    // Memoize the split size handler
+    const handleSplitChange = useCallback((newSize) => {
+        setSplitSize(newSize);
+    }, []);
 
     if (isLoading) {
         return <LoadingState message="Loading lab environment..." size="lg" />;
@@ -151,10 +161,10 @@ export default function LabPage() {
             {/* Main content */}
             <div className="flex-1 overflow-hidden">
                 {isMobile ? (
-                    // Mobile view - show active panel only
+                    // Mobile view
                     activePanel === 'terminal' ? (
                         <div className="h-full">
-                            <TerminalContainer sessionId={id} />
+                            <MemoizedTerminalContainer {...terminalProps} />
                         </div>
                     ) : (
                         <div className="h-full overflow-auto">
@@ -164,14 +174,17 @@ export default function LabPage() {
                 ) : (
                     // Desktop view - split panel
                     <SplitPanel
-                        left={<TerminalContainer sessionId={id} />}
+                        left={<MemoizedTerminalContainer {...terminalProps} />}
                         right={<TaskPanel sessionId={id} scenarioId={session.scenarioId} />}
                         direction="horizontal"
                         defaultSplit={splitSize}
-                        onChange={setSplitSize}
+                        onChange={handleSplitChange}
                     />
                 )}
             </div>
         </div>
     );
 }
+
+// Memoize the TerminalContainer to prevent re-renders during validation
+const MemoizedTerminalContainer = React.memo(TerminalContainer);

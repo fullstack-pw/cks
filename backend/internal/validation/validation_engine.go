@@ -299,7 +299,7 @@ func (e *Engine) validateScript(ctx context.Context, session *models.Session, ru
 	}
 
 	// Execute script and check exit code
-	scriptCmd := fmt.Sprintf("%s; echo $?", scriptFile)
+	scriptCmd := fmt.Sprintf("bash %s; echo $?", scriptFile)
 	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, scriptCmd)
 
 	// Cleanup
