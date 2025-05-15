@@ -1,4 +1,4 @@
-// frontend/components/Terminal.js
+// frontend/components/Terminal.js - Enhanced version
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import '@xterm/xterm/css/xterm.css';
@@ -7,7 +7,6 @@ import { Button, StatusIndicator } from './common';
 // Dynamically import xterm with no SSR
 const TerminalComponent = dynamic(
     () => {
-        // Import dependencies only on client side
         return Promise.all([
             import('@xterm/xterm'),
             import('@xterm/addon-fit'),
@@ -31,6 +30,8 @@ const TerminalComponent = dynamic(
                 const [connected, setConnected] = useState(false);
                 const [searchVisible, setSearchVisible] = useState(false);
                 const [searchTerm, setSearchTerm] = useState('');
+                const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
+                const [totalSearchResults, setTotalSearchResults] = useState(0);
 
                 // Initialize terminal
                 useEffect(() => {
@@ -57,6 +58,12 @@ const TerminalComponent = dynamic(
                     terminal.current.loadAddon(fitAddon.current);
                     terminal.current.loadAddon(searchAddon.current);
                     terminal.current.loadAddon(webLinksAddon);
+
+                    // Handle search results
+                    searchAddon.current.onDidChangeResults(results => {
+                        setCurrentSearchIndex(results ? results.resultIndex : 0);
+                        setTotalSearchResults(results ? results.resultCount : 0);
+                    });
 
                     // Open terminal
                     terminal.current.open(terminalRef.current);
@@ -115,6 +122,7 @@ const TerminalComponent = dynamic(
                             reconnectAttempts.current = 0;
                             if (onConnectionChange) onConnectionChange(true);
                             terminal.current.writeln('\r\nConnection established!');
+                            terminal.current.clear();
 
                             // Send initial terminal size
                             sendTerminalSize();
@@ -230,16 +238,89 @@ const TerminalComponent = dynamic(
                     return () => window.removeEventListener('resize', handleResize);
                 }, [sendTerminalSize]);
 
-                // Handle search in terminal
-                const handleSearch = useCallback(() => {
+                // Handle search functionality
+                const performSearch = useCallback((searchForward = true) => {
                     if (!terminal.current || !searchAddon.current || !searchTerm) return;
 
                     try {
-                        searchAddon.current.findNext(searchTerm);
+                        if (searchForward) {
+                            searchAddon.current.findNext(searchTerm, {
+                                incremental: false,
+                                decorations: {
+                                    matchBackground: '#444',
+                                    matchOverviewRuler: '#888',
+                                    activeMatchBackground: '#f90',
+                                    activeMatchColorOverviewRuler: '#f90'
+                                }
+                            });
+                        } else {
+                            searchAddon.current.findPrevious(searchTerm, {
+                                incremental: false,
+                                decorations: {
+                                    matchBackground: '#444',
+                                    matchOverviewRuler: '#888',
+                                    activeMatchBackground: '#f90',
+                                    activeMatchColorOverviewRuler: '#f90'
+                                }
+                            });
+                        }
                     } catch (error) {
                         console.error('Search error:', error);
                     }
                 }, [searchTerm]);
+
+                // Handle search input change
+                const handleSearchInputChange = useCallback((value) => {
+                    setSearchTerm(value);
+                    if (value) {
+                        performSearch();
+                    }
+                }, [performSearch]);
+
+                // Clear terminal
+                const clearTerminal = useCallback(() => {
+                    if (terminal.current) {
+                        terminal.current.clear();
+                        terminal.current.scrollToTop();
+                    }
+                }, []);
+
+                // Close search
+                const closeSearch = useCallback(() => {
+                    setSearchVisible(false);
+                    setSearchTerm('');
+                    if (searchAddon.current) {
+                        searchAddon.current.clearDecorations();
+                    }
+                    if (terminal.current) {
+                        terminal.current.focus();
+                    }
+                }, []);
+
+                // Handle keyboard shortcuts
+                useEffect(() => {
+                    const handleKeyDown = (e) => {
+                        // Ctrl+F or Cmd+F for search
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+                            e.preventDefault();
+                            setSearchVisible(true);
+
+                            // Focus search input after state update
+                            setTimeout(() => {
+                                const searchInput = document.getElementById('terminal-search-input');
+                                if (searchInput) searchInput.focus();
+                            }, 0);
+                        }
+
+                        // Escape to close search
+                        if (e.key === 'Escape' && searchVisible) {
+                            closeSearch();
+                        }
+                    };
+
+                    window.addEventListener('keydown', handleKeyDown);
+                    return () => window.removeEventListener('keydown', handleKeyDown);
+                }, [searchVisible, closeSearch]);
 
                 return (
                     <div className="h-full w-full flex flex-col">
@@ -256,26 +337,52 @@ const TerminalComponent = dynamic(
                         {searchVisible && (
                             <div className="bg-gray-800 p-2 flex items-center">
                                 <input
+                                    id="terminal-search-input"
                                     type="text"
                                     value={searchTerm}
-                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                    onChange={(e) => handleSearchInputChange(e.target.value)}
                                     placeholder="Search..."
                                     className="flex-1 px-3 py-1 text-sm text-white bg-gray-700 border border-gray-600 rounded-l"
-                                    onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                                    onKeyPress={(e) => {
+                                        if (e.key === 'Enter') {
+                                            performSearch();
+                                        }
+                                    }}
                                 />
+                                <div className="flex items-center bg-gray-700 px-2 text-xs text-gray-300">
+                                    {totalSearchResults > 0 ? (
+                                        <span>{currentSearchIndex + 1}/{totalSearchResults}</span>
+                                    ) : (
+                                        <span>0/0</span>
+                                    )}
+                                </div>
                                 <Button
-                                    variant="primary"
+                                    variant="ghost"
                                     size="sm"
-                                    onClick={handleSearch}
-                                    className="rounded-l-none"
+                                    onClick={() => performSearch(false)}
+                                    className="text-white hover:bg-gray-600"
+                                    title="Previous match"
                                 >
-                                    Find
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 11l5-5m0 0l5 5m-5-5v12" />
+                                    </svg>
+                                </Button>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => performSearch(true)}
+                                    className="text-white hover:bg-gray-600"
+                                    title="Next match"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 13l-5 5m0 0l-5-5m5 5V6" />
+                                    </svg>
                                 </Button>
                                 <Button
                                     variant="secondary"
                                     size="sm"
-                                    onClick={() => setSearchVisible(false)}
-                                    className="ml-2"
+                                    onClick={closeSearch}
+                                    className="ml-1"
                                 >
                                     Close
                                 </Button>
@@ -289,13 +396,13 @@ const TerminalComponent = dynamic(
 
                         {/* Terminal toolbar */}
                         <div className="bg-gray-800 p-2 flex justify-between items-center">
-                            <div className="flex">
+                            <div className="flex space-x-2">
                                 <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => setSearchVisible(!searchVisible)}
-                                    title="Search"
-                                    className="mr-1"
+                                    onClick={() => setSearchVisible(true)}
+                                    title="Search (Ctrl+F)"
+                                    className="text-gray-300 hover:text-white hover:bg-gray-700"
                                     aria-label="Search terminal"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -305,8 +412,9 @@ const TerminalComponent = dynamic(
                                 <Button
                                     variant="ghost"
                                     size="sm"
-                                    onClick={() => terminal.current && terminal.current.clear()}
-                                    title="Clear"
+                                    onClick={clearTerminal}
+                                    title="Clear terminal"
+                                    className="text-gray-300 hover:text-white hover:bg-gray-700"
                                     aria-label="Clear terminal"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -314,27 +422,16 @@ const TerminalComponent = dynamic(
                                     </svg>
                                 </Button>
                             </div>
-                            <div className="hidden xs:flex items-center">
-                                <StatusIndicator
-                                    status={connected ? 'connected' : 'disconnected'}
-                                    label={connected ? 'Connected' : 'Disconnected'}
-                                    size="sm"
-                                />
-                            </div>
-                            <div>
+
+                            <div className="flex items-center space-x-2">
                                 <Button
                                     variant={connected ? 'ghost' : 'primary'}
                                     size="sm"
                                     onClick={connectWebSocket}
                                     disabled={connected}
+                                    className={connected ? 'text-green-400' : ''}
                                 >
-                                    {connected ? (
-                                        <span className="hidden sm:inline">Connected</span>
-                                    ) : (
-                                        <span>
-                                            <span className="hidden sm:inline">Re</span>connect
-                                        </span>
-                                    )}
+                                    {connected ? 'Connected' : 'Reconnect'}
                                 </Button>
                             </div>
                         </div>
@@ -344,7 +441,7 @@ const TerminalComponent = dynamic(
         });
     },
     {
-        ssr: false, // This prevents the component from being rendered on the server
+        ssr: false,
         loading: () => (
             <div className="flex justify-center items-center h-full bg-gray-800 text-white">
                 <div className="flex flex-col items-center">
@@ -356,14 +453,6 @@ const TerminalComponent = dynamic(
     }
 );
 
-/**
- * Terminal component that handles xterm.js integration and WebSocket connection
- * to Kubernetes pods for interactive shell access.
- * 
- * @param {Object} props
- * @param {string} props.terminalId - The ID of the terminal session
- * @param {Function} props.onConnectionChange - Callback for terminal connection status changes
- */
 const Terminal = ({ terminalId, onConnectionChange }) => {
     return (
         <div className="h-full w-full flex flex-col relative">
