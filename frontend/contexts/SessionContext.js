@@ -1,6 +1,4 @@
-// frontend/contexts/SessionContext.js (enhanced error handling)
-
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { mutate } from 'swr';
 import { useToast } from './ToastContext';
@@ -17,22 +15,141 @@ export const SessionProvider = ({ children }) => {
     const router = useRouter();
     const toast = useToast();
 
+    // Track active requests for cancellation
+    const activeRequests = useRef(new Map());
+
+    // Cancel active request helper
+    const cancelActiveRequest = useCallback((key) => {
+        const controller = activeRequests.current.get(key);
+        if (controller) {
+            controller.abort();
+            activeRequests.current.delete(key);
+        }
+    }, []);
+
     // Global fetcher function for SWR with error handling
     const fetcher = async (url) => {
         try {
             return await api.sessions.get(url.split('/').pop());
         } catch (err) {
-            // Use our error handler to process the error
             const processedError = ErrorHandler.handleError(
                 err,
                 'session:fetch',
                 toast.error
             );
-
             setError(processedError);
             throw processedError;
         }
     };
+
+    // Validate a task with proper cancellation and race condition handling
+    const validateTask = useCallback(async (sessionId, taskId) => {
+        const requestKey = `validate-${sessionId}-${taskId}`;
+
+        // Cancel any existing validation for this task
+        cancelActiveRequest(requestKey);
+
+        // Create new abort controller
+        const controller = new AbortController();
+        activeRequests.current.set(requestKey, controller);
+
+        try {
+            setLoading(true);
+            setError(null);
+
+            // Optimistic update: mark task as validating
+            mutate(`/sessions/${sessionId}`, (current) => {
+                if (!current || !current.tasks) return current;
+
+                return {
+                    ...current,
+                    tasks: current.tasks.map(task =>
+                        task.id === taskId
+                            ? { ...task, status: 'validating' }
+                            : task
+                    )
+                };
+            }, false);
+
+            // Perform validation with abort signal
+            const result = await api.tasks.validateWithSignal(sessionId, taskId, {
+                signal: controller.signal
+            });
+
+            // Update cache with validation result
+            mutate(`/sessions/${sessionId}`, (current) => {
+                if (!current || !current.tasks) return current;
+
+                return {
+                    ...current,
+                    tasks: current.tasks.map(task =>
+                        task.id === taskId
+                            ? { ...task, status: result.success ? 'completed' : 'failed' }
+                            : task
+                    )
+                };
+            }, false);
+
+            // Show success toast only for successful validations
+            if (result.success) {
+                toast.success('Task validated successfully');
+            }
+
+            return result;
+        } catch (err) {
+            // Check if request was cancelled
+            if (err.name === 'AbortError') {
+                console.log('Validation cancelled');
+                return {
+                    success: false,
+                    message: 'Validation cancelled',
+                    details: []
+                };
+            }
+
+            // Revert optimistic update on error
+            mutate(`/sessions/${sessionId}`, (current) => {
+                if (!current || !current.tasks) return current;
+
+                return {
+                    ...current,
+                    tasks: current.tasks.map(task =>
+                        task.id === taskId
+                            ? { ...task, status: 'pending' } // Revert to previous state
+                            : task
+                    )
+                };
+            }, false);
+
+            const processedError = ErrorHandler.handleError(
+                err,
+                'task:validate',
+                null
+            );
+
+            toast.error(processedError.message);
+
+            return {
+                success: false,
+                message: processedError.message,
+                details: processedError.details || []
+            };
+        } finally {
+            setLoading(false);
+            activeRequests.current.delete(requestKey);
+        }
+    }, [toast, cancelActiveRequest]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            // Cancel all active requests
+            activeRequests.current.forEach((controller) => {
+                controller.abort();
+            });
+            activeRequests.current.clear();
+        };
+    }, []);
 
     // Create a new session with enhanced error handling
     const createSession = async (scenarioId) => {
@@ -112,40 +229,6 @@ export const SessionProvider = ({ children }) => {
             setLoading(false);
         }
     };
-
-    // Validate a task with enhanced error handling
-    const validateTask = useCallback(async (sessionId, taskId) => {
-        setLoading(true);
-        setError(null);
-
-        try {
-            const result = await api.tasks.validate(sessionId, taskId);
-
-            // Only trigger a session refresh if validation succeeded
-            if (result.success) {
-                // Use non-blocking refresh to avoid UI freezes
-                mutate(`/sessions/${sessionId}`, undefined, false);
-            }
-
-            return result;
-        } catch (err) {
-            const processedError = ErrorHandler.handleError(
-                err,
-                'task:validate',
-                null
-            );
-
-            toast.error(processedError.message);
-
-            return {
-                success: false,
-                message: processedError.message,
-                details: processedError.details || []
-            };
-        } finally {
-            setLoading(false);
-        }
-    }, [toast]);
 
     // Create a terminal session with enhanced error handling
     const createTerminal = async (sessionId, target) => {
