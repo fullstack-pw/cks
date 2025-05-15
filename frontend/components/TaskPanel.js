@@ -262,6 +262,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                         <ValidationResult
                             result={validationResult}
                             onRetry={() => handleValidateTask(currentTask.id)}
+                            scenarioId={scenarioId}
                         />
                     )}
 
