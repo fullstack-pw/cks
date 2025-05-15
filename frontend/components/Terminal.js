@@ -27,6 +27,10 @@ const TerminalComponent = dynamic(
                 const searchAddon = useRef(null);
                 const reconnectTimeout = useRef(null);
                 const reconnectAttempts = useRef(0);
+                const eventListeners = useRef([]); // Track all event listeners
+                const isComponentMounted = useRef(true); // Track component mount state
+
+
                 const [connected, setConnected] = useState(false);
                 const [searchVisible, setSearchVisible] = useState(false);
                 const [searchTerm, setSearchTerm] = useState('');
@@ -35,8 +39,9 @@ const TerminalComponent = dynamic(
 
                 // Initialize terminal
                 useEffect(() => {
-                    if (!terminalRef.current || !terminalId) return;
+                    isComponentMounted.current = true;
 
+                    if (!terminalRef.current || !terminalId) return;
                     // Create terminal instance
                     terminal.current = new Terminal({
                         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
@@ -83,19 +88,19 @@ const TerminalComponent = dynamic(
 
                     // Cleanup
                     return () => {
-                        disconnectWebSocket();
-                        if (terminal.current) {
-                            terminal.current.dispose();
-                            terminal.current = null;
-                        }
-                        if (reconnectTimeout.current) {
-                            clearTimeout(reconnectTimeout.current);
-                        }
+                        isComponentMounted.current = false;
+                        cleanup();
                     };
-                }, [terminalId]);
+                }, [terminalId, cleanup]);
 
                 // Connect to WebSocket
                 const connectWebSocket = useCallback(() => {
+                    if (!isComponentMounted.current) return;
+                    if (!terminalId || !terminal.current) return;
+                    if (socket.current?.readyState === WebSocket.CONNECTING) return;
+
+                    // Disconnect existing connection first
+                    disconnectWebSocket();
                     if (!terminalId || !terminal.current || socket.current?.readyState === WebSocket.CONNECTING) {
                         return;
                     }
@@ -129,19 +134,16 @@ const TerminalComponent = dynamic(
                         };
 
                         socket.current.onclose = (event) => {
+                            if (!isComponentMounted.current) return;
+
                             console.log(`WebSocket closed for terminal ${terminalId}`, event);
                             setConnected(false);
                             if (onConnectionChange) onConnectionChange(false);
-                            terminal.current.writeln('\r\nConnection closed. Attempting to reconnect...');
 
-                            // Reconnect with exponential backoff
-                            if (!reconnectTimeout.current) {
-                                reconnectAttempts.current++;
-                                const delay = calculateReconnectDelay();
-                                reconnectTimeout.current = setTimeout(() => {
-                                    reconnectTimeout.current = null;
-                                    connectWebSocket();
-                                }, delay);
+                            // Only reconnect if component is still mounted and not intentionally closed
+                            if (isComponentMounted.current && event.code !== 1000) {
+                                terminal.current.writeln('\r\nConnection closed. Attempting to reconnect...');
+                                scheduleReconnect();
                             }
                         };
 
@@ -174,6 +176,22 @@ const TerminalComponent = dynamic(
                         terminal.current.writeln(`\r\nFailed to connect: ${error.message}`);
                     }
                 }, [terminalId, onConnectionChange]);
+
+                // Schedule reconnection with proper cleanup
+                const scheduleReconnect = useCallback(() => {
+                    if (!isComponentMounted.current) return;
+                    if (reconnectTimeout.current) return;
+
+                    reconnectAttempts.current++;
+                    const delay = calculateReconnectDelay();
+
+                    reconnectTimeout.current = setTimeout(() => {
+                        reconnectTimeout.current = null;
+                        if (isComponentMounted.current) {
+                            connectWebSocket();
+                        }
+                    }, delay);
+                }, [connectWebSocket]);
 
                 // Disconnect WebSocket
                 const disconnectWebSocket = useCallback(() => {
@@ -221,9 +239,10 @@ const TerminalComponent = dynamic(
                     }
                 }, []);
 
-                // Handle resize
+                // Handle resize with tracked event listener
                 useEffect(() => {
                     const handleResize = () => {
+                        if (!isComponentMounted.current) return;
                         if (fitAddon.current && terminal.current) {
                             try {
                                 fitAddon.current.fit();
@@ -234,9 +253,12 @@ const TerminalComponent = dynamic(
                         }
                     };
 
-                    window.addEventListener('resize', handleResize);
-                    return () => window.removeEventListener('resize', handleResize);
-                }, [sendTerminalSize]);
+                    addEventListenerTracked(window, 'resize', handleResize);
+
+                    return () => {
+                        // Cleanup happens in main useEffect
+                    };
+                }, [sendTerminalSize, addEventListenerTracked]);
 
                 // Handle search functionality
                 const performSearch = useCallback((searchForward = true) => {
@@ -285,6 +307,60 @@ const TerminalComponent = dynamic(
                     }
                 }, []);
 
+                // Cleanup function to remove all resources
+                const cleanup = useCallback(() => {
+                    console.log('Starting terminal cleanup');
+
+                    // Clear reconnect timeout
+                    if (reconnectTimeout.current) {
+                        clearTimeout(reconnectTimeout.current);
+                        reconnectTimeout.current = null;
+                    }
+
+                    // Close WebSocket
+                    if (socket.current) {
+                        socket.current.onclose = null; // Prevent reconnection
+                        socket.current.onerror = null;
+                        socket.current.onmessage = null;
+                        socket.current.onopen = null;
+
+                        if (socket.current.readyState === WebSocket.OPEN) {
+                            socket.current.close();
+                        }
+                        socket.current = null;
+                    }
+
+                    // Remove all event listeners
+                    eventListeners.current.forEach(({ target, event, handler }) => {
+                        target.removeEventListener(event, handler);
+                    });
+                    eventListeners.current = [];
+
+                    // Dispose terminal and addons
+                    if (searchAddon.current) {
+                        searchAddon.current.dispose();
+                        searchAddon.current = null;
+                    }
+
+                    if (fitAddon.current) {
+                        fitAddon.current.dispose();
+                        fitAddon.current = null;
+                    }
+
+                    if (terminal.current) {
+                        terminal.current.dispose();
+                        terminal.current = null;
+                    }
+
+                    console.log('Terminal cleanup complete');
+                }, []);
+
+                // Add event listener with tracking
+                const addEventListenerTracked = useCallback((target, event, handler) => {
+                    target.addEventListener(event, handler);
+                    eventListeners.current.push({ target, event, handler });
+                }, []);
+
                 // Close search
                 const closeSearch = useCallback(() => {
                     setSearchVisible(false);
@@ -300,6 +376,7 @@ const TerminalComponent = dynamic(
                 // Handle keyboard shortcuts
                 useEffect(() => {
                     const handleKeyDown = (e) => {
+                        if (!isComponentMounted.current) return;
                         // Ctrl+F or Cmd+F for search
                         if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
                             e.preventDefault();
@@ -317,10 +394,12 @@ const TerminalComponent = dynamic(
                             closeSearch();
                         }
                     };
+                    addEventListenerTracked(window, 'keydown', handleKeyDown);
 
-                    window.addEventListener('keydown', handleKeyDown);
-                    return () => window.removeEventListener('keydown', handleKeyDown);
-                }, [searchVisible, closeSearch]);
+                    return () => {
+                        // Cleanup happens in main useEffect
+                    };
+                }, [searchVisible, closeSearch, addEventListenerTracked]);
 
                 return (
                     <div className="h-full w-full flex flex-col">

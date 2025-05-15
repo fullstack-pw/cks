@@ -27,13 +27,18 @@ const TerminalContainer = ({ sessionId }) => {
         error: null
     });
 
-    // Keep a ref to track component mount status
+    // Track component mount status
     const isMounted = useRef(true);
+    const cleanupFunctions = useRef([]);
 
-    // Effect to track mount/unmount
     useEffect(() => {
+        isMounted.current = true;
+
         return () => {
             isMounted.current = false;
+            // Execute all cleanup functions
+            cleanupFunctions.current.forEach(cleanup => cleanup());
+            cleanupFunctions.current = [];
         };
     }, []);
 
@@ -42,6 +47,7 @@ const TerminalContainer = ({ sessionId }) => {
         if (!sessionId) return;
 
         const checkSessionStatus = async () => {
+            if (!isMounted.current) return;
             try {
                 // Remove the mount check that prevents state updates
                 setSessionStatus(prev => ({ ...prev, isLoading: true, error: null }));
@@ -59,45 +65,32 @@ const TerminalContainer = ({ sessionId }) => {
 
                     // Create control plane terminal automatically
                     createTerminalSession('control-plane');
-                } else if (session.status === 'provisioning' || session.status === 'pending') {
-                    setSessionStatus({
-                        isReady: false,
-                        isLoading: false,
-                        message: `Environment is being prepared (${session.status}). This may take 5-10 minutes...`,
-                        error: null
-                    });
-
-                    // Poll every 15 seconds
-                    if (isMounted.current) { // Only check mount status for recursive calls
-                        const timeoutId = setTimeout(checkSessionStatus, 15000);
-                        return () => clearTimeout(timeoutId);
-                    }
-                } else if (session.status === 'failed') {
-                    setSessionStatus({
-                        isReady: false,
-                        isLoading: false,
-                        message: 'Failed to prepare environment',
-                        error: session.statusMessage || 'Unknown error'
-                    });
-                } else {
-                    setSessionStatus({
-                        isReady: false,
-                        isLoading: false,
-                        message: `Session status: ${session.status}`,
-                        error: null
-                    });
+                } else if ((session.status === 'provisioning' || session.status === 'pending') && isMounted.current) {
+                    timeoutId = setTimeout(checkSessionStatus, 15000);
                 }
             } catch (error) {
-                setSessionStatus({
-                    isReady: false,
-                    isLoading: false,
-                    message: 'Unable to check session status',
-                    error: error.message || 'Unknown error'
-                });
+                if (isMounted.current) {
+                    setSessionStatus({
+                        isReady: false,
+                        isLoading: false,
+                        message: 'Unable to check session status',
+                        error: error.message || 'Unknown error'
+                    });
+                }
             }
         };
 
         checkSessionStatus();
+        // Cleanup function
+        const cleanup = () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        };
+
+        cleanupFunctions.current.push(cleanup);
+
+        return cleanup;
     }, [sessionId]);
 
     // Create a terminal session
