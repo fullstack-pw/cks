@@ -1,21 +1,10 @@
-// frontend/components/ValidationResult.js - Final version with scenario context
+// frontend/components/ValidationResult.js - Enhanced version
 
 import React from 'react';
 import { Card } from './common';
-import { getValidationDescription, getValidationCategory } from '../utils/validationDescriptions';
 
 const ValidationResult = ({ result, onRetry, scenarioId }) => {
   if (!result) return null;
-
-  // Group validations by category
-  const groupedDetails = result.details ? result.details.reduce((groups, detail) => {
-    const category = getValidationCategory(detail.rule);
-    if (!groups[category]) {
-      groups[category] = [];
-    }
-    groups[category].push(detail);
-    return groups;
-  }, {}) : {};
 
   return (
     <Card
@@ -57,7 +46,7 @@ const ValidationResult = ({ result, onRetry, scenarioId }) => {
               </span>
               <span className={`text-sm font-semibold ${result.success ? 'text-green-600' : 'text-red-600'
                 }`}>
-                {result.details.filter(d => d.passed).length}/{result.details.length} objectives completed
+                {result.details.filter(d => d.passed).length}/{result.details.length} checks passed
               </span>
             </div>
             <div className="mt-2 bg-gray-200 rounded-full h-2">
@@ -72,26 +61,18 @@ const ValidationResult = ({ result, onRetry, scenarioId }) => {
           </div>
         )}
 
-        {/* Grouped Validation Results */}
-        {Object.keys(groupedDetails).length > 0 && (
-          <div className="space-y-4">
+        {/* Detailed Validation Results */}
+        {result.details && result.details.length > 0 && (
+          <div className="space-y-3">
             <h4 className="text-sm font-semibold text-gray-700">
-              Task Objectives:
+              Validation Details:
             </h4>
-            {Object.entries(groupedDetails).map(([category, details]) => (
-              <div key={category} className="space-y-2">
-                <h5 className="text-xs font-medium text-gray-600 uppercase tracking-wider">
-                  {category}
-                </h5>
-                {details.map((detail, index) => (
-                  <ValidationRuleResult
-                    key={`${detail.rule}-${index}`}
-                    detail={detail}
-                    index={index}
-                    scenarioId={scenarioId}
-                  />
-                ))}
-              </div>
+            {result.details.map((detail, index) => (
+              <ValidationRuleResult
+                key={`${detail.rule}-${index}`}
+                detail={detail}
+                index={index}
+              />
             ))}
           </div>
         )}
@@ -117,16 +98,14 @@ const ValidationResult = ({ result, onRetry, scenarioId }) => {
   );
 };
 
-// Enhanced sub-component with scenario awareness
-const ValidationRuleResult = ({ detail, index, scenarioId }) => {
+const ValidationRuleResult = ({ detail, index }) => {
   const [isExpanded, setIsExpanded] = React.useState(!detail.passed);
-  const description = getValidationDescription(detail.rule, scenarioId);
 
   return (
     <div
       className={`border rounded-lg transition-all duration-200 ${detail.passed ?
-          'border-green-200 bg-green-50 hover:bg-green-100' :
-          'border-red-200 bg-red-50 hover:bg-red-100'
+          'border-green-200 bg-green-50' :
+          'border-red-200 bg-red-50'
         }`}
     >
       <div
@@ -150,24 +129,27 @@ const ValidationRuleResult = ({ detail, index, scenarioId }) => {
             <div className="flex-1">
               <p className={`font-medium text-sm ${detail.passed ? 'text-green-800' : 'text-red-800'
                 }`}>
-                {description}
+                {detail.description || `Check ${index + 1}: ${detail.rule}`}
               </p>
               {!isExpanded && !detail.passed && (
                 <p className="text-xs mt-0.5 text-red-600">
-                  Click to see details
+                  {detail.message.split(':')[0]}
                 </p>
               )}
             </div>
           </div>
-          <svg
-            className={`w-5 h-5 text-gray-400 transform transition-transform ${isExpanded ? 'rotate-180' : ''
-              }`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-          </svg>
+          <div className="flex items-center">
+            <span className="text-xs text-gray-500 mr-2">{detail.type}</span>
+            <svg
+              className={`w-5 h-5 text-gray-400 transform transition-transform ${isExpanded ? 'rotate-180' : ''
+                }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
         </div>
       </div>
 
@@ -180,6 +162,38 @@ const ValidationRuleResult = ({ detail, index, scenarioId }) => {
               }`}>
               {detail.message}
             </p>
+
+            {/* Show expected vs actual if available */}
+            {(detail.expected !== undefined || detail.actual !== undefined) && (
+              <div className="mt-3 space-y-2">
+                {detail.expected !== undefined && (
+                  <div className="flex items-start">
+                    <span className="text-xs font-medium text-gray-700 w-20">Expected:</span>
+                    <code className="text-xs bg-white px-2 py-1 rounded font-mono flex-1">
+                      {JSON.stringify(detail.expected)}
+                    </code>
+                  </div>
+                )}
+                {detail.actual !== undefined && (
+                  <div className="flex items-start">
+                    <span className="text-xs font-medium text-gray-700 w-20">Actual:</span>
+                    <code className="text-xs bg-white px-2 py-1 rounded font-mono flex-1">
+                      {JSON.stringify(detail.actual)}
+                    </code>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Show error details if available */}
+            {detail.errorDetails && (
+              <div className="mt-3">
+                <p className="text-xs font-medium text-gray-700">Error Details:</p>
+                <code className="text-xs bg-white px-2 py-1 rounded font-mono block mt-1 text-red-600">
+                  {detail.errorDetails}
+                </code>
+              </div>
+            )}
           </div>
         </div>
       )}

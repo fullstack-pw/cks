@@ -158,9 +158,14 @@ type ValidationResponse struct {
 
 // ValidationDetail represents detailed validation results
 type ValidationDetail struct {
-	Rule    string `json:"rule"`
-	Passed  bool   `json:"passed"`
-	Message string `json:"message,omitempty"`
+	Rule         string      `json:"rule"`
+	Passed       bool        `json:"passed"`
+	Message      string      `json:"message,omitempty"`
+	Expected     interface{} `json:"expected,omitempty"`
+	Actual       interface{} `json:"actual,omitempty"`
+	Description  string      `json:"description,omitempty"`
+	Type         string      `json:"type,omitempty"`
+	ErrorDetails string      `json:"errorDetails,omitempty"`
 }
 
 // CreateSessionRequest represents a request to create a new session

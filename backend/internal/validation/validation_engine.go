@@ -71,20 +71,23 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 
 func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
 	detail := models.ValidationDetail{
-		Rule:    rule.ID,
-		Passed:  false,
-		Message: rule.ErrorMessage,
+		Rule:        rule.ID,
+		Passed:      false,
+		Message:     rule.ErrorMessage,
+		Type:        rule.Type,
+		Description: rule.Description,
 	}
 
 	var err error
 
 	// Add logging to track rule execution
 	logrus.WithFields(logrus.Fields{
-		"ruleID":   rule.ID,
-		"ruleType": rule.Type,
-		"resource": rule.Resource,
-		"command":  rule.Command,
-		"script":   rule.Script,
+		"ruleID":      rule.ID,
+		"ruleType":    rule.Type,
+		"description": rule.Description,
+		"resource":    rule.Resource,
+		"command":     rule.Command,
+		"script":      rule.Script,
 	}).Debug("Starting validation rule execution")
 
 	switch rule.Type {
@@ -104,13 +107,22 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 		detail.Message = fmt.Sprintf("Unknown validation type: %s", rule.Type)
 	}
 
+	// Ensure type and description are always set
+	detail.Type = rule.Type
+	if detail.Description == "" {
+		detail.Description = rule.Description
+	}
+
 	// Log the complete validation detail
 	logrus.WithFields(logrus.Fields{
-		"ruleID":  rule.ID,
-		"passed":  detail.Passed,
-		"message": detail.Message,
-		"error":   err,
-	}).Info("Validation rule completed") // Changed from Debug to Info for visibility
+		"ruleID":      rule.ID,
+		"passed":      detail.Passed,
+		"message":     detail.Message,
+		"expected":    detail.Expected,
+		"actual":      detail.Actual,
+		"description": detail.Description,
+		"error":       err,
+	}).Info("Validation rule completed")
 
 	return detail, err
 }
@@ -181,8 +193,10 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 
 func (e *Engine) validateResourceProperty(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
 	detail := models.ValidationDetail{
-		Rule:   rule.ID,
-		Passed: false,
+		Rule:        rule.ID,
+		Passed:      false,
+		Type:        rule.Type,
+		Description: fmt.Sprintf("Checking %s %s property %s", rule.Resource.Kind, rule.Resource.Name, rule.Resource.Property),
 	}
 
 	if rule.Resource == nil || rule.Resource.Property == "" {
@@ -205,10 +219,13 @@ func (e *Engine) validateResourceProperty(ctx context.Context, session *models.S
 	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, session.ControlPlaneVM, cmd)
 	if err != nil {
 		detail.Message = fmt.Sprintf("Failed to get property: %v", err)
+		detail.ErrorDetails = err.Error()
 		return detail, nil
 	}
 
 	output = strings.TrimSpace(output)
+	detail.Actual = output
+	detail.Expected = rule.Value
 
 	// Check the condition
 	passed := false
@@ -232,35 +249,12 @@ func (e *Engine) validateResourceProperty(ctx context.Context, session *models.S
 		re, err := regexp.Compile(pattern)
 		if err != nil {
 			detail.Message = fmt.Sprintf("Invalid regex pattern: %v", err)
+			detail.ErrorDetails = err.Error()
 			return detail, nil
 		}
 		passed = re.MatchString(output)
 		if !passed {
 			detail.Message = fmt.Sprintf("%s: output does not match pattern '%s'", rule.ErrorMessage, pattern)
-		}
-
-	case "greater_than", "less_than", "equals_numeric":
-		// Handle numeric comparisons
-		outputNum, err1 := strconv.ParseFloat(output, 64)
-		expectedNum, err2 := strconv.ParseFloat(fmt.Sprintf("%v", rule.Value), 64)
-
-		if err1 != nil || err2 != nil {
-			detail.Message = "Failed to parse numeric values"
-			return detail, nil
-		}
-
-		switch rule.Condition {
-		case "greater_than":
-			passed = outputNum > expectedNum
-		case "less_than":
-			passed = outputNum < expectedNum
-		case "equals_numeric":
-			passed = outputNum == expectedNum
-		}
-
-		if !passed {
-			detail.Message = fmt.Sprintf("%s: got %f, expected %s %f",
-				rule.ErrorMessage, outputNum, rule.Condition, expectedNum)
 		}
 
 	default:
@@ -353,8 +347,10 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 	}).Debug("Starting validateCommand")
 
 	detail := models.ValidationDetail{
-		Rule:   rule.ID,
-		Passed: false,
+		Rule:        rule.ID,
+		Passed:      false,
+		Type:        rule.Type,
+		Description: "Command execution validation",
 	}
 
 	if rule.Command == nil {
@@ -369,6 +365,8 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 		target = session.WorkerNodeVM
 	}
 
+	detail.Description = fmt.Sprintf("Executing command on %s", rule.Command.Target)
+
 	logrus.WithFields(logrus.Fields{
 		"target":    target,
 		"command":   rule.Command.Command,
@@ -377,6 +375,9 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 
 	// Execute command
 	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, rule.Command.Command)
+
+	// Store the actual output
+	detail.Actual = strings.TrimSpace(output)
 
 	logrus.WithFields(logrus.Fields{
 		"output": output,
@@ -387,16 +388,21 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 	// Check condition
 	switch rule.Condition {
 	case "success":
+		detail.Expected = "Command should execute successfully"
 		if err == nil {
 			detail.Passed = true
 			detail.Message = "Command executed successfully"
 		} else {
 			detail.Message = fmt.Sprintf("%s: %v", rule.ErrorMessage, err)
+			detail.ErrorDetails = err.Error()
 		}
 
 	case "output_equals":
 		expectedOutput := fmt.Sprintf("%v", rule.Value)
 		actualOutput := strings.TrimSpace(output)
+		detail.Expected = expectedOutput
+		detail.Actual = actualOutput
+
 		logrus.WithFields(logrus.Fields{
 			"expected": expectedOutput,
 			"actual":   actualOutput,
@@ -407,15 +413,23 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 			detail.Message = "Command output matches expected value"
 		} else {
 			detail.Message = fmt.Sprintf("%s: expected '%s', got '%s'", rule.ErrorMessage, expectedOutput, actualOutput)
+			if err != nil {
+				detail.ErrorDetails = err.Error()
+			}
 		}
 
 	case "output_contains":
 		expectedValue := fmt.Sprintf("%v", rule.Value)
+		detail.Expected = fmt.Sprintf("Output should contain '%s'", expectedValue)
+
 		if err == nil && strings.Contains(output, expectedValue) {
 			detail.Passed = true
 			detail.Message = "Command output contains expected value"
 		} else {
 			detail.Message = fmt.Sprintf("%s: output does not contain '%s'", rule.ErrorMessage, expectedValue)
+			if err != nil {
+				detail.ErrorDetails = err.Error()
+			}
 		}
 
 	default:

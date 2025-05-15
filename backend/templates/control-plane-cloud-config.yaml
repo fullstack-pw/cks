@@ -56,4 +56,17 @@ runcmd:
   # Set up kubeconfig for suporte user
   - mkdir -p /home/suporte/.kube
   - cp -i /etc/kubernetes/admin.conf /home/suporte/.kube/config
-  - chown -R suporte:suporte /home/suporte/.kube
+  - chown -R suporte:suporte /home/suporte
+
+  # Set up kubectl completion for suporte user
+  - |
+    # Generate kubectl completion and set it up for suporte user
+    kubectl completion bash > /home/suporte/.kube/completion.bash.inc
+    echo 'source /home/suporte/.kube/completion.bash.inc' >> /home/suporte/.bashrc
+    chown suporte:suporte /home/suporte/.kube/completion.bash.inc
+    chown suporte:suporte /home/suporte/.bashrc
+
+  # Change default shell for suporte user
+  - usermod -s /bin/bash suporte
+  - echo 'alias k=kubectl' >> /home/suporte/.bashrc
+  - source /home/suporte/.bashrc

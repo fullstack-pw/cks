@@ -5,6 +5,7 @@ package controllers
 import (
 	"net/http"
 
+	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/fullstack-pw/cks/backend/internal/services"
 	"github.com/gin-gonic/gin"
 )
@@ -29,6 +30,8 @@ func (sc *ScenarioController) RegisterRoutes(router *gin.Engine) {
 		scenarios.GET("/:id", sc.GetScenario)
 		scenarios.GET("/categories", sc.ListCategories)
 		scenarios.POST("/reload", sc.ReloadScenarios)
+		scenarios.GET("/:id/tasks/:taskId/validation", sc.GetTaskValidation)
+
 	}
 }
 
@@ -81,4 +84,35 @@ func (sc *ScenarioController) ReloadScenarios(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Scenarios reloaded"})
+}
+
+// GetTaskValidation returns validation rules for a specific task
+func (sc *ScenarioController) GetTaskValidation(c *gin.Context) {
+	scenarioID := c.Param("id")
+	taskID := c.Param("taskId")
+
+	scenario, err := sc.scenarioService.GetScenario(scenarioID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Find the task
+	var task *models.Task
+	for _, t := range scenario.Tasks {
+		if t.ID == taskID {
+			task = &t
+			break
+		}
+	}
+
+	if task == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"taskId":     task.ID,
+		"validation": task.Validation,
+	})
 }
