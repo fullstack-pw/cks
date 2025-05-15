@@ -37,62 +37,6 @@ const TerminalComponent = dynamic(
                 const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
                 const [totalSearchResults, setTotalSearchResults] = useState(0);
 
-                // Initialize terminal
-                useEffect(() => {
-                    isComponentMounted.current = true;
-
-                    if (!terminalRef.current || !terminalId) return;
-                    // Create terminal instance
-                    terminal.current = new Terminal({
-                        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-                        fontSize: 14,
-                        rows: 24,
-                        cursorBlink: true,
-                        theme: {
-                            background: '#1e1e1e',
-                            foreground: '#d4d4d4'
-                        }
-                    });
-
-                    // Create addons
-                    fitAddon.current = new FitAddon();
-                    searchAddon.current = new SearchAddon();
-                    const webLinksAddon = new WebLinksAddon();
-
-                    // Load addons
-                    terminal.current.loadAddon(fitAddon.current);
-                    terminal.current.loadAddon(searchAddon.current);
-                    terminal.current.loadAddon(webLinksAddon);
-
-                    // Handle search results
-                    searchAddon.current.onDidChangeResults(results => {
-                        setCurrentSearchIndex(results ? results.resultIndex : 0);
-                        setTotalSearchResults(results ? results.resultCount : 0);
-                    });
-
-                    // Open terminal
-                    terminal.current.open(terminalRef.current);
-
-                    // Initial fit after terminal is open
-                    setTimeout(() => {
-                        if (fitAddon.current) {
-                            try {
-                                fitAddon.current.fit();
-                                console.log('Terminal fitted successfully');
-                            } catch (error) {
-                                console.error('Terminal fit error:', error);
-                            }
-                        }
-                        connectWebSocket();
-                    }, 100);
-
-                    // Cleanup
-                    return () => {
-                        isComponentMounted.current = false;
-                        cleanup();
-                    };
-                }, [terminalId, cleanup]);
-
                 // Connect to WebSocket
                 const connectWebSocket = useCallback(() => {
                     if (!isComponentMounted.current) return;
@@ -239,27 +183,6 @@ const TerminalComponent = dynamic(
                     }
                 }, []);
 
-                // Handle resize with tracked event listener
-                useEffect(() => {
-                    const handleResize = () => {
-                        if (!isComponentMounted.current) return;
-                        if (fitAddon.current && terminal.current) {
-                            try {
-                                fitAddon.current.fit();
-                                sendTerminalSize();
-                            } catch (error) {
-                                console.error('Resize error:', error);
-                            }
-                        }
-                    };
-
-                    addEventListenerTracked(window, 'resize', handleResize);
-
-                    return () => {
-                        // Cleanup happens in main useEffect
-                    };
-                }, [sendTerminalSize, addEventListenerTracked]);
-
                 // Handle search functionality
                 const performSearch = useCallback((searchForward = true) => {
                     if (!terminal.current || !searchAddon.current || !searchTerm) return;
@@ -372,6 +295,83 @@ const TerminalComponent = dynamic(
                         terminal.current.focus();
                     }
                 }, []);
+
+                // Initialize terminal
+                useEffect(() => {
+                    isComponentMounted.current = true;
+
+                    if (!terminalRef.current || !terminalId) return;
+                    // Create terminal instance
+                    terminal.current = new Terminal({
+                        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                        fontSize: 14,
+                        rows: 24,
+                        cursorBlink: true,
+                        theme: {
+                            background: '#1e1e1e',
+                            foreground: '#d4d4d4'
+                        }
+                    });
+
+                    // Create addons
+                    fitAddon.current = new FitAddon();
+                    searchAddon.current = new SearchAddon();
+                    const webLinksAddon = new WebLinksAddon();
+
+                    // Load addons
+                    terminal.current.loadAddon(fitAddon.current);
+                    terminal.current.loadAddon(searchAddon.current);
+                    terminal.current.loadAddon(webLinksAddon);
+
+                    // Handle search results
+                    searchAddon.current.onDidChangeResults(results => {
+                        setCurrentSearchIndex(results ? results.resultIndex : 0);
+                        setTotalSearchResults(results ? results.resultCount : 0);
+                    });
+
+                    // Open terminal
+                    terminal.current.open(terminalRef.current);
+
+                    // Initial fit after terminal is open
+                    setTimeout(() => {
+                        if (fitAddon.current) {
+                            try {
+                                fitAddon.current.fit();
+                                console.log('Terminal fitted successfully');
+                            } catch (error) {
+                                console.error('Terminal fit error:', error);
+                            }
+                        }
+                        connectWebSocket();
+                    }, 100);
+
+                    // Cleanup
+                    return () => {
+                        isComponentMounted.current = false;
+                        cleanup();
+                    };
+                }, [terminalId, cleanup]);
+
+                // Handle resize with tracked event listener
+                useEffect(() => {
+                    const handleResize = () => {
+                        if (!isComponentMounted.current) return;
+                        if (fitAddon.current && terminal.current) {
+                            try {
+                                fitAddon.current.fit();
+                                sendTerminalSize();
+                            } catch (error) {
+                                console.error('Resize error:', error);
+                            }
+                        }
+                    };
+
+                    addEventListenerTracked(window, 'resize', handleResize);
+
+                    return () => {
+                        // Cleanup happens in main useEffect
+                    };
+                }, [sendTerminalSize, addEventListenerTracked]);
 
                 // Handle keyboard shortcuts
                 useEffect(() => {
