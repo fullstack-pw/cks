@@ -1,5 +1,5 @@
 // frontend/components/TaskPanel.js
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
@@ -19,6 +19,8 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [showAllTasks, setShowAllTasks] = useState(false);
     const [validationProgress, setValidationProgress] = useState(null);
     const [validationRules, setValidationRules] = useState(null);
+    const resultRef = useRef(null);
+    const [forceUpdate, setForceUpdate] = useState(0);
     const getValidationObjectiveDescription = (rule) => {
         switch (rule.type) {
             case 'resource_exists':
@@ -45,26 +47,52 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     };
 
     //Helper functions
-    const ValidationObjectives = ({ rules, validationResult }) => {
-        console.log("ValidationObjectives component RENDER ATTEMPT");
-        console.log("ValidationObjectives - rules received:", rules);
-        console.log("ValidationObjectives - validationResult received:", validationResult);
-        if (!rules || rules.length === 0) return null;
+    const ValidationObjectives = React.memo(({ rules, validationResult }) => {
+        console.log("ValidationObjectives component RENDER with:", {
+            hasRules: !!rules?.length,
+            hasResult: !!validationResult,
+            resultDetails: validationResult?.details?.length || 0
+        });
 
-        console.log("ValidationObjectives received validationResult:", validationResult);
+        useEffect(() => {
+            console.log("ValidationObjectives effect ran with validationResult:", validationResult);
+        }, [validationResult]);
 
-        // Helper function to find validation detail for a rule
+        if (!rules || rules.length === 0) {
+            console.log("ValidationObjectives - No rules to display");
+            return null;
+        }
+
+        console.log("ValidationObjectives - rules:", rules);
+        console.log("ValidationObjectives - validationResult:", validationResult);
+
+        // Helper function to find validation detail for a rule with better debugging
         const findValidationDetail = (ruleId) => {
-            if (!validationResult || !validationResult.details) return null;
-            return validationResult.details.find(detail => detail.rule === ruleId);
+            if (!validationResult || !validationResult.details) {
+                console.log(`No validation details available for rule: ${ruleId}`);
+                return null;
+            }
+
+            const detail = validationResult.details.find(detail => detail.rule === ruleId);
+
+            if (!detail) {
+                console.log(`No matching validation detail found for rule: ${ruleId}`);
+                console.log(`Available validation details:`, validationResult.details.map(d => d.rule));
+            } else {
+                console.log(`Found validation detail for rule: ${ruleId}`, detail);
+            }
+
+            return detail;
         };
-        console.log("ValidationObjectives received rules:", rules);
-        console.log("ValidationObjectives received validationResult:", validationResult);
+
         return (
             <Card className="mb-6 border-blue-200 bg-blue-50">
                 <div className="p-4">
                     <h3 className="text-sm font-medium text-blue-900 mb-3">
                         Validation Objectives ({rules.length} checks)
+                        {validationResult && <span className="ml-2 text-xs">
+                            {validationResult.success ? '✅ All passed' : '❌ Some failed'}
+                        </span>}
                     </h3>
                     <div className="space-y-3">
                         {rules.map((rule, index) => {
@@ -80,7 +108,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                                         'bg-gray-100 border border-gray-200'
                                     }`}>
                                     <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mr-3 
-                                    ${validationStatus === 'completed' ? 'bg-green-500' :
+                                ${validationStatus === 'completed' ? 'bg-green-500' :
                                             validationStatus === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`}>
                                         {validationStatus === 'completed' ? (
                                             <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -132,7 +160,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 </div>
             </Card>
         );
-    };
+    });
 
     // Handle task validation
     const handleValidateTask = useCallback(async (taskId) => {
@@ -143,7 +171,9 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         }
 
         setValidating(true);
-        setValidationResult(null);
+        setValidationResult(null); // Clearing previous validation result
+        console.log('[TaskPanel] Reset validation result state to null');
+
         // Set up validation stages for progress tracking
         const validationStages = [
             { name: 'Connecting to cluster', message: 'Establishing connection...' },
@@ -156,13 +186,16 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             stages: validationStages,
             currentStage: 0
         });
+        console.log('[TaskPanel] Set initial validation progress stage');
 
         try {
             console.log('[TaskPanel] Calling validateTask with:', { sessionId, taskId });
-            // Simulate progress through stages (in real app, this would be from WebSocket)
+
+            // Simulate progress through stages
             const progressInterval = setInterval(() => {
                 setValidationProgress(prev => {
                     if (!prev || prev.currentStage >= prev.stages.length - 1) {
+                        clearInterval(progressInterval); // Clear interval if we've reached the end
                         return prev;
                     }
                     return {
@@ -172,17 +205,37 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 });
             }, 1000);
 
-
             const result = await validateTask(sessionId, taskId);
-            console.log('[TaskPanel] Validation result:', result);
+            clearInterval(progressInterval); // Ensure interval is cleared when done
+
+            console.log('[TaskPanel] Validation result received:', result);
+            console.log('[TaskPanel] Validation success:', result.success);
             console.log('[TaskPanel] Validation details:', result.details);
 
-            // Set both states in one update block
-            setValidationResult(result);
+            // Ensure validationRules are updated with the current task if needed
+            if (scenario && scenario.tasks) {
+                const taskForValidation = scenario.tasks.find(t => t.id === taskId);
+                if (taskForValidation && taskForValidation.validation) {
+                    console.log('[TaskPanel] Using validation rules from task:', taskId);
+                    console.log('[TaskPanel] Validation rules:', taskForValidation.validation);
+                    setValidationRules(taskForValidation.validation);
+                }
+            }
+
+            // Set validation result after everything is ready
+            console.log('[TaskPanel] Setting validation result in state');
+            resultRef.current = result;  // Store in ref for immediate access
+            setValidationResult(result); // Update state
+            setForceUpdate(prev => prev + 1); // Force a re-render
+            setValidationProgress(null);
+
+            console.log("[TaskPanel] validationResult in ref:", resultRef.current);
+            console.log("[TaskPanel] validationResult in state:", validationResult);
+            console.log('[TaskPanel] Validation result set in state, component should re-render');
 
             return result;
         } catch (err) {
-            // Handle error locally instead of re-throwing
+            // Handle error locally
             setValidationProgress(null);
             console.error('[TaskPanel] Validation error:', err);
             setValidationResult({
@@ -193,7 +246,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         } finally {
             setValidating(false);
         }
-    }, [sessionId, validateTask]);
+    }, [sessionId, validateTask, scenario, validationResult, setValidationResult, setValidationRules, setForceUpdate]);
 
     // Toggle hint visibility
     const toggleHint = (taskId) => {
@@ -248,17 +301,33 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 // Extract validation info from the scenario data
                 const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
                 if (taskFromScenario && taskFromScenario.validation) {
+                    console.log(`[TaskPanel] Loaded ${taskFromScenario.validation.length} validation rules for task ${currentTask.id}`,
+                        taskFromScenario.validation);
                     setValidationRules(taskFromScenario.validation);
-                    console.log('Validation rules:', taskFromScenario.validation);
+
+                    // Clear previous validation result when changing tasks
+                    setValidationResult(null);
+                } else {
+                    console.log(`[TaskPanel] No validation rules found for task ${currentTask.id}`);
+                    setValidationRules([]);
                 }
             } catch (err) {
                 console.error('Error fetching validation rules:', err);
+                setValidationRules([]);
             }
         };
 
         fetchValidationRules();
     }, [activeTaskIndex, scenario]);
 
+    useEffect(() => {
+        if (validationResult) {
+            console.log("[TaskPanel] validationResult state changed:", validationResult);
+            console.log("[TaskPanel] validationResult details count:", validationResult.details?.length);
+            // Force refresh of ValidationObjectives
+            setValidationRules(prevRules => [...prevRules]); // Create a new array reference
+        }
+    }, [validationResult]);
     if (loading) {
         return <LoadingState message="Loading scenario details..." />;
     }
@@ -289,6 +358,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         );
     }
     const currentTask = tasks[activeTaskIndex];
+
     return (
         <div className="flex flex-col h-full bg-white">
             {/* Mobile toggle for task list */}
@@ -396,21 +466,41 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             scenarioId={scenarioId}
                         />
                     )}
+                    {validationResult && (
+                        <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs">
+                            <details>
+                                <summary className="cursor-pointer font-medium">Debug Info</summary>
+                                <pre className="mt-2 whitespace-pre-wrap">
+                                    {JSON.stringify({
+                                        taskId: currentTask.id,
+                                        resultSuccess: validationResult.success,
+                                        resultDetails: validationResult.details.map(d => ({
+                                            rule: d.rule,
+                                            passed: d.passed
+                                        })),
+                                        rules: validationRules.map(r => r.id)
+                                    }, null, 2)}
+                                </pre>
+                            </details>
+                        </div>
+                    )}
                     {validationRules && validationRules.length > 0 && (
-                        <div className="mb-6">
-
+                        <div className="mb-6" key={`validation-section-${forceUpdate}`}>
                             <div>
                                 {/* Debug information to verify data */}
-                                {validationResult && (
-                                    <div className="text-xs text-gray-500 mb-2">
-                                        Validation completed: {validationResult.success ? 'Success' : 'Failed'}
-                                        ({validationResult.details?.length || 0} details)
-                                    </div>
-                                )}
+                                <div className="text-xs text-gray-500 mb-2">
+                                    {validationResult || resultRef.current ? (
+                                        `Validation completed: ${(validationResult || resultRef.current)?.success ? 'Success' : 'Failed'} 
+          (${(validationResult || resultRef.current)?.details?.length || 0} details)`
+                                    ) : (
+                                        'No validation result yet'
+                                    )}
+                                </div>
 
                                 <ValidationObjectives
+                                    key={`validation-objectives-${currentTask.id}-${forceUpdate}`}
                                     rules={validationRules}
-                                    validationResult={validationResult || null}
+                                    validationResult={resultRef.current}
                                 />
                             </div>
                         </div>
