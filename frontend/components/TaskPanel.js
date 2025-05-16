@@ -19,7 +19,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [showAllTasks, setShowAllTasks] = useState(false);
     const [validationProgress, setValidationProgress] = useState(null);
     const [validationRules, setValidationRules] = useState(null);
-    const [showObjectives, setShowObjectives] = useState(false);
     const getValidationObjectiveDescription = (rule) => {
         switch (rule.type) {
             case 'resource_exists':
@@ -180,7 +179,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
             // Set both states in one update block
             setValidationResult(result);
-            setShowObjectives(true);
 
             return result;
         } catch (err) {
@@ -400,35 +398,21 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                     )}
                     {validationRules && validationRules.length > 0 && (
                         <div className="mb-6">
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setShowObjectives(!showObjectives)}
-                                className="mb-3"
-                            >
-                                {showObjectives ? 'Hide Validation Objectives' : 'Show Validation Objectives'}
-                                <span className="ml-1 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">
-                                    {validationRules.length}
-                                </span>
-                            </Button>
 
-                            {showObjectives && (
-                                <div>
-                                    {console.log('[TaskPanel] showObjectives is true, should render component')}
-                                    {/* Debug information to verify data */}
-                                    {validationResult && (
-                                        <div className="text-xs text-gray-500 mb-2">
-                                            Validation completed: {validationResult.success ? 'Success' : 'Failed'}
-                                            ({validationResult.details?.length || 0} details)
-                                        </div>
-                                    )}
+                            <div>
+                                {/* Debug information to verify data */}
+                                {validationResult && (
+                                    <div className="text-xs text-gray-500 mb-2">
+                                        Validation completed: {validationResult.success ? 'Success' : 'Failed'}
+                                        ({validationResult.details?.length || 0} details)
+                                    </div>
+                                )}
 
-                                    <ValidationObjectives
-                                        rules={validationRules}
-                                        validationResult={validationResult || null}
-                                    />
-                                </div>
-                            )}
+                                <ValidationObjectives
+                                    rules={validationRules}
+                                    validationResult={validationResult || null}
+                                />
+                            </div>
                         </div>
                     )}
                     {/* Validation button */}
