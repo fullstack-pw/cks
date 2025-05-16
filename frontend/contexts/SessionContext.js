@@ -72,9 +72,7 @@ export const SessionProvider = ({ children }) => {
             }, false);
 
             // Perform validation with abort signal
-            const result = await api.tasks.validateWithSignal(sessionId, taskId, {
-                signal: controller.signal
-            });
+            const result = await api.tasks.validate(sessionId, taskId);
 
             // Update cache with validation result
             mutate(`/sessions/${sessionId}`, (current) => {
