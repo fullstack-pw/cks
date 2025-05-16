@@ -20,7 +20,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [validationProgress, setValidationProgress] = useState(null);
     const [validationRules, setValidationRules] = useState(null);
     const [showObjectives, setShowObjectives] = useState(false);
-
     const getValidationObjectiveDescription = (rule) => {
         switch (rule.type) {
             case 'resource_exists':
@@ -44,6 +43,175 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             default:
                 return rule.description || rule.errorMessage || 'Custom validation';
         }
+    };
+
+    //Helper functions
+    const ValidationObjectives = ({ rules, validationResult }) => {
+        if (!rules || rules.length === 0) return null;
+
+        console.log("ValidationObjectives received validationResult:", validationResult);
+
+        // Helper function to find validation detail for a rule
+        const findValidationDetail = (ruleId) => {
+            if (!validationResult || !validationResult.details) return null;
+            return validationResult.details.find(detail => detail.rule === ruleId);
+        };
+
+        return (
+            <Card className="mb-6 border-blue-200 bg-blue-50">
+                <div className="p-4">
+                    <h3 className="text-sm font-medium text-blue-900 mb-3">
+                        Validation Objectives ({rules.length} checks)
+                    </h3>
+                    <div className="space-y-3">
+                        {rules.map((rule, index) => {
+                            // Find validation detail for this rule
+                            const validationDetail = findValidationDetail(rule.id);
+                            const validationStatus = validationDetail
+                                ? (validationDetail.passed ? 'completed' : 'failed')
+                                : 'pending';
+
+                            return (
+                                <div key={rule.id} className={`flex items-start p-2 rounded-md ${validationStatus === 'completed' ? 'bg-green-100 border border-green-200' :
+                                    validationStatus === 'failed' ? 'bg-red-100 border border-red-200' :
+                                        'bg-gray-100 border border-gray-200'
+                                    }`}>
+                                    <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mr-3 
+                                    ${validationStatus === 'completed' ? 'bg-green-500' :
+                                            validationStatus === 'failed' ? 'bg-red-500' : 'bg-gray-400'}`}>
+                                        {validationStatus === 'completed' ? (
+                                            <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                            </svg>
+                                        ) : validationStatus === 'failed' ? (
+                                            <svg className="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                            </svg>
+                                        ) : (
+                                            <span className="text-sm font-medium text-white">{index + 1}</span>
+                                        )}
+                                    </div>
+                                    <div className="flex-1">
+                                        <div className="flex items-center">
+                                            <p className={`text-sm font-medium ${validationStatus === 'completed' ? 'text-green-800' :
+                                                validationStatus === 'failed' ? 'text-red-800' :
+                                                    'text-gray-800'
+                                                }`}>
+                                                {getValidationObjectiveDescription(rule)}
+                                            </p>
+                                            <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${validationStatus === 'completed' ? 'bg-green-200 text-green-800' :
+                                                validationStatus === 'failed' ? 'bg-red-200 text-red-800' :
+                                                    'bg-gray-200 text-gray-800'
+                                                }`}>
+                                                {validationStatus === 'completed' ? 'Passed' :
+                                                    validationStatus === 'failed' ? 'Failed' : 'Pending'}
+                                            </span>
+                                        </div>
+
+                                        {/* Show rule details */}
+                                        {rule.description && (
+                                            <p className="text-xs text-gray-600 mt-1">{rule.description}</p>
+                                        )}
+
+                                        {/* Show validation message */}
+                                        {validationDetail && (
+                                            <div className={`mt-2 text-xs p-1.5 rounded ${validationDetail.passed ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                                                }`}>
+                                                <strong>{validationDetail.passed ? 'Success: ' : 'Error: '}</strong>
+                                                {validationDetail.message}
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
+            </Card>
+        );
+    };
+
+    // Handle task validation
+    const handleValidateTask = useCallback(async (taskId) => {
+        console.log('[TaskPanel] Starting validation for task:', taskId);
+        if (event) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+
+        setValidating(true);
+        setValidationResult(null);
+        // Set up validation stages for progress tracking
+        const validationStages = [
+            { name: 'Connecting to cluster', message: 'Establishing connection...' },
+            { name: 'Checking resources', message: 'Verifying Kubernetes resources...' },
+            { name: 'Validating configuration', message: 'Checking task requirements...' },
+            { name: 'Final verification', message: 'Completing validation...' }
+        ];
+
+        setValidationProgress({
+            stages: validationStages,
+            currentStage: 0
+        });
+
+        try {
+            console.log('[TaskPanel] Calling validateTask with:', { sessionId, taskId });
+            // Simulate progress through stages (in real app, this would be from WebSocket)
+            const progressInterval = setInterval(() => {
+                setValidationProgress(prev => {
+                    if (!prev || prev.currentStage >= prev.stages.length - 1) {
+                        return prev;
+                    }
+                    return {
+                        ...prev,
+                        currentStage: prev.currentStage + 1
+                    };
+                });
+            }, 1000);
+
+            const result = await validateTask(sessionId, taskId);
+
+            clearInterval(progressInterval);
+            setValidationProgress(null);
+
+            // Add debug logging
+            console.log('[TaskPanel] Validation result:', result);
+            console.log('[TaskPanel] Validation details:', result.details);
+
+            setValidationResult(result);
+
+            // Automatically show objectives when validation completes
+            setShowObjectives(true);
+
+            return result;
+        } catch (err) {
+            // Handle error locally instead of re-throwing
+            setValidationProgress(null);
+            console.error('[TaskPanel] Validation error:', err);
+            setValidationResult({
+                success: false,
+                message: err.message || 'Validation failed due to an unexpected error',
+                details: []
+            });
+        } finally {
+            setValidating(false);
+        }
+    }, [sessionId, validateTask]);
+
+    // Toggle hint visibility
+    const toggleHint = (taskId) => {
+        setShowHints(prev => ({
+            ...prev,
+            [taskId]: !prev[taskId]
+        }));
+    };
+
+    // Get task status
+    const getTaskStatus = (taskId) => {
+        if (!session || !session.tasks) return 'pending';
+
+        const task = session.tasks.find(t => t.id === taskId);
+        return task ? task.status : 'pending';
     };
 
     // Hooks
@@ -94,122 +262,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         fetchValidationRules();
     }, [activeTaskIndex, scenario]);
 
-    //Helper functions
-    const ValidationObjectives = ({ rules }) => {
-        if (!rules || rules.length === 0) return null;
-
-        return (
-            <Card className="mb-6 border-blue-200 bg-blue-50">
-                <div className="p-4">
-                    <h3 className="text-sm font-medium text-blue-900 mb-3">
-                        Validation Objectives ({rules.length} checks)
-                    </h3>
-                    <div className="space-y-2">
-                        {rules.map((rule, index) => (
-                            <div key={rule.id} className="flex items-start">
-                                <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center mr-3">
-                                    <span className="text-xs font-medium text-blue-800">{index + 1}</span>
-                                </div>
-                                <div className="flex-1">
-                                    <p className="text-sm text-blue-800 font-medium">
-                                        {getValidationObjectiveDescription(rule)}
-                                    </p>
-                                    {rule.description && (
-                                        <p className="text-xs text-blue-600 mt-1">{rule.description}</p>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            </Card>
-        );
-    };
-
-    // Handle task validation
-    const handleValidateTask = useCallback(async (taskId) => {
-        console.log('[TaskPanel] Starting validation for task:', taskId);
-        if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
-
-        setValidating(true);
-        setValidationResult(null);
-        // Set up validation stages for progress tracking
-        const validationStages = [
-            { name: 'Connecting to cluster', message: 'Establishing connection...' },
-            { name: 'Checking resources', message: 'Verifying Kubernetes resources...' },
-            { name: 'Validating configuration', message: 'Checking task requirements...' },
-            { name: 'Final verification', message: 'Completing validation...' }
-        ];
-
-        setValidationProgress({
-            stages: validationStages,
-            currentStage: 0
-        });
-
-        try {
-            console.log('[TaskPanel] Calling validateTask with:', { sessionId, taskId });
-            // Simulate progress through stages (in real app, this would be from WebSocket)
-            const progressInterval = setInterval(() => {
-                setValidationProgress(prev => {
-                    if (!prev || prev.currentStage >= prev.stages.length - 1) {
-                        return prev;
-                    }
-                    return {
-                        ...prev,
-                        currentStage: prev.currentStage + 1
-                    };
-                });
-            }, 1000);
-
-            const result = await validateTask(sessionId, taskId);
-
-            console.log('[TaskPanel] Validation result:', result);
-            console.log('[TaskPanel] Validation details:', result.details);
-
-            clearInterval(progressInterval);
-            setValidationProgress(null);
-
-            // Add debug logging
-            console.log('[TaskPanel] Validation result:', result);
-            console.log('[TaskPanel] Validation details:', result.details);
-
-            setValidationResult(result);
-
-            // Don't throw errors here - handle them gracefully
-            return result;
-        } catch (err) {
-            // Handle error locally instead of re-throwing
-            setValidationProgress(null);
-            console.error('[TaskPanel] Validation error:', err);
-            setValidationResult({
-                success: false,
-                message: err.message || 'Validation failed due to an unexpected error',
-                details: []
-            });
-        } finally {
-            setValidating(false);
-        }
-    }, [sessionId, validateTask]);
-
-    // Toggle hint visibility
-    const toggleHint = (taskId) => {
-        setShowHints(prev => ({
-            ...prev,
-            [taskId]: !prev[taskId]
-        }));
-    };
-
-    // Get task status
-    const getTaskStatus = (taskId) => {
-        if (!session || !session.tasks) return 'pending';
-
-        const task = session.tasks.find(t => t.id === taskId);
-        return task ? task.status : 'pending';
-    };
-
     if (loading) {
         return <LoadingState message="Loading scenario details..." />;
     }
@@ -231,9 +283,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             </div>
         );
     }
-
     const tasks = scenario.tasks || [];
-
     if (tasks.length === 0) {
         return (
             <div className="p-4">
@@ -241,9 +291,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             </div>
         );
     }
-
     const currentTask = tasks[activeTaskIndex];
-
     return (
         <div className="flex flex-col h-full bg-white">
             {/* Mobile toggle for task list */}
@@ -366,7 +414,20 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             </Button>
 
                             {showObjectives && (
-                                <ValidationObjectives rules={validationRules} />
+                                <div>
+                                    {/* Debug information to verify data */}
+                                    {validationResult && (
+                                        <div className="text-xs text-gray-500 mb-2">
+                                            Validation completed: {validationResult.success ? 'Success' : 'Failed'}
+                                            ({validationResult.details?.length || 0} details)
+                                        </div>
+                                    )}
+
+                                    <ValidationObjectives
+                                        rules={validationRules}
+                                        validationResult={validationResult}
+                                    />
+                                </div>
                             )}
                         </div>
                     )}
