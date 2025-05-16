@@ -1,5 +1,5 @@
 // frontend/components/TaskPanel.js
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
@@ -7,18 +7,22 @@ import ValidationProgress from './ValidationProgress';
 import ValidationResult from './ValidationResult';
 import ValidationSummary from './ValidationSummary';
 
+const validationStages = [
+    { name: 'Connecting to cluster', message: 'Establishing connection...' },
+    { name: 'Checking resources', message: 'Verifying Kubernetes resources...' },
+    { name: 'Validating configuration', message: 'Checking task requirements...' },
+    { name: 'Final verification', message: 'Completing validation...' }
+];
+
 const TaskPanel = ({ sessionId, scenarioId }) => {
+    console.log("[TASK_PANEL] Component rendered, sessionId:", sessionId);
     const { session, validateTask } = useSession(sessionId);
     const [scenario, setScenario] = useState(null);
     const [activeTaskIndex, setActiveTaskIndex] = useState(0);
     const [showHints, setShowHints] = useState({});
-    const [validating, setValidating] = useState(false);
-    const [validationResult, setValidationResult] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showAllTasks, setShowAllTasks] = useState(false);
-    const [validationProgress, setValidationProgress] = useState(null);
-    const [validationRules, setValidationRules] = useState(null);
     const getValidationObjectiveDescription = (rule) => {
         switch (rule.type) {
             case 'resource_exists':
@@ -44,27 +48,77 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         }
     };
 
-    //Helper functions
-    const ValidationObjectives = ({ rules, validationResult }) => {
-        console.log("ValidationObjectives component RENDER ATTEMPT");
-        console.log("ValidationObjectives - rules received:", rules);
-        console.log("ValidationObjectives - validationResult received:", validationResult);
-        if (!rules || rules.length === 0) return null;
+    const [validationState, setValidationState] = useState({
+        isValidating: false,
+        result: null,
+        progress: null,
+        rules: null,
+        error: null
+    });
 
-        console.log("ValidationObjectives received validationResult:", validationResult);
+    const ValidationObjectives = React.memo(({ rules, validationResult }) => {
+        // Keep important state change logging
+        console.log("[VALIDATION_OBJECTIVES] Rendering with:", {
+            hasRules: !!rules?.length,
+            rulesCount: rules?.length || 0,
+            hasResult: !!validationResult,
+            resultSuccess: validationResult?.success,
+            resultDetails: validationResult?.details?.length || 0,
+            resultDetailsRules: validationResult?.details?.map(d => d.rule) || []
+        });
+
+        // Add effect to log when validation results are updated
+        useEffect(() => {
+            if (validationResult && validationResult.details && validationResult.details.length > 0) {
+                // Log only when validation results are available and change
+                console.log("[VALIDATION_OBJECTIVES] Validation results updated:", {
+                    success: validationResult.success,
+                    detailsCount: validationResult.details.length,
+                    details: validationResult.details.map(d => ({
+                        rule: d.rule,
+                        passed: d.passed
+                    }))
+                });
+            }
+        }, [validationResult]);
+
+        if (!rules || rules.length === 0) {
+            console.log("ValidationObjectives - No rules to display");
+            return null;
+        }
 
         // Helper function to find validation detail for a rule
         const findValidationDetail = (ruleId) => {
-            if (!validationResult || !validationResult.details) return null;
-            return validationResult.details.find(detail => detail.rule === ruleId);
+            if (!validationResult || !validationResult.details || !validationResult.details.length) {
+                return null;
+            }
+
+            console.log("[VALIDATION_OBJECTIVES] Matching rule:", ruleId);
+            console.log("[VALIDATION_OBJECTIVES] Available details:", validationResult.details.map(d => d.rule));
+
+            // Try direct match
+            let detail = validationResult.details.find(detail => detail.rule === ruleId);
+
+            // If no exact match, try to find a detail that might be related
+            if (!detail && ruleId) {
+                // Look for partial matches (e.g., if ruleId has prefixes/suffixes)
+                detail = validationResult.details.find(detail =>
+                    detail.rule && (detail.rule.includes(ruleId) || ruleId.includes(detail.rule))
+                );
+            }
+
+            console.log("[VALIDATION_OBJECTIVES] Match found:", !!detail, detail);
+            return detail;
         };
-        console.log("ValidationObjectives received rules:", rules);
-        console.log("ValidationObjectives received validationResult:", validationResult);
+
         return (
             <Card className="mb-6 border-blue-200 bg-blue-50">
                 <div className="p-4">
                     <h3 className="text-sm font-medium text-blue-900 mb-3">
                         Validation Objectives ({rules.length} checks)
+                        {validationResult && <span className="ml-2 text-xs">
+                            {validationResult.success ? '✅ All passed' : '❌ Some failed'}
+                        </span>}
                     </h3>
                     <div className="space-y-3">
                         {rules.map((rule, index) => {
@@ -132,70 +186,142 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 </div>
             </Card>
         );
-    };
+    }, (prevProps, nextProps) => {
+        // If either validationResult is null but the other isn't
+        if ((!prevProps.validationResult && nextProps.validationResult) ||
+            (prevProps.validationResult && !nextProps.validationResult)) {
+            console.log("[VALIDATION_OBJECTIVES] Re-render due to validation result existence change");
+            return false; // Re-render if validation result existence changes
+        }
 
-    // Handle task validation
-    const handleValidateTask = useCallback(async (taskId) => {
-        console.log('[TaskPanel] Starting validation for task:', taskId);
+        // Rules changed in length or content
+        const rulesChanged = prevProps.rules?.length !== nextProps.rules?.length ||
+            JSON.stringify(prevProps.rules?.map(r => r.id)) !==
+            JSON.stringify(nextProps.rules?.map(r => r.id));
+
+        // If validation results exist, check for meaningful changes
+        const resultChanged = prevProps.validationResult && nextProps.validationResult && (
+            // Success state changed
+            prevProps.validationResult.success !== nextProps.validationResult.success ||
+            // Details length changed
+            prevProps.validationResult.details?.length !== nextProps.validationResult.details?.length ||
+            // Detail pass/fail statuses changed
+            JSON.stringify(prevProps.validationResult.details?.map(d => ({ rule: d.rule, passed: d.passed }))) !==
+            JSON.stringify(nextProps.validationResult.details?.map(d => ({ rule: d.rule, passed: d.passed })))
+        );
+
+        console.log("[VALIDATION_OBJECTIVES] shouldUpdate:", {
+            rulesChanged,
+            resultChanged,
+            shouldUpdate: rulesChanged || resultChanged
+        });
+
+        // Note: React.memo returns true when it should NOT re-render, so we return
+        // false when we detect changes that SHOULD trigger a re-render
+        return !(rulesChanged || resultChanged);
+    });
+
+    // Enhanced task validation handler
+    const handleValidateTask = useCallback(async (taskId, event) => {
         if (event) {
             event.preventDefault();
             event.stopPropagation();
         }
 
-        setValidating(true);
-        setValidationResult(null);
-        // Set up validation stages for progress tracking
-        const validationStages = [
-            { name: 'Connecting to cluster', message: 'Establishing connection...' },
-            { name: 'Checking resources', message: 'Verifying Kubernetes resources...' },
-            { name: 'Validating configuration', message: 'Checking task requirements...' },
-            { name: 'Final verification', message: 'Completing validation...' }
-        ];
+        // Get validation rules upfront before starting validation
+        let rules = [];
+        if (scenario && scenario.tasks) {
+            const taskForValidation = scenario.tasks.find(t => t.id === taskId);
+            if (taskForValidation && taskForValidation.validation) {
+                rules = taskForValidation.validation;
+                console.log("[VALIDATE] Found validation rules:", rules.length);
+            }
+        }
 
-        setValidationProgress({
-            stages: validationStages,
-            currentStage: 0
-        });
+        // Try direct state update instead of functional update
+        console.log("[VALIDATE] Initial validation state set, rules:", rules.length);
+
+        let progressInterval;
+        let progressTimeout;
 
         try {
-            console.log('[TaskPanel] Calling validateTask with:', { sessionId, taskId });
-            // Simulate progress through stages (in real app, this would be from WebSocket)
-            const progressInterval = setInterval(() => {
-                setValidationProgress(prev => {
-                    if (!prev || prev.currentStage >= prev.stages.length - 1) {
+            // Create progress simulation interval
+            progressInterval = setInterval(() => {
+                setValidationState(prev => {
+                    if (!prev.progress || prev.progress.currentStage >= prev.progress.stages.length - 1) {
                         return prev;
                     }
                     return {
                         ...prev,
-                        currentStage: prev.currentStage + 1
+                        progress: {
+                            ...prev.progress,
+                            currentStage: prev.progress.currentStage + 1
+                        }
                     };
                 });
             }, 1000);
 
+            // Set a maximum timeout for validation (30 seconds)
+            const timeoutPromise = new Promise((_, reject) => {
+                progressTimeout = setTimeout(() => {
+                    reject(new Error('Validation timeout - took too long to complete'));
+                }, 30000);
+            });
 
-            const result = await validateTask(sessionId, taskId);
-            console.log('[TaskPanel] Validation result:', result);
-            console.log('[TaskPanel] Validation details:', result.details);
+            // Execute validation with timeout
+            const result = await Promise.race([
+                validateTask(sessionId, taskId),
+                timeoutPromise
+            ]);
+            console.log("[VALIDATE] Validation result received:", JSON.stringify(result));
 
-            // Set both states in one update block
-            setValidationResult(result);
+            // Log the current validation state before update
+            console.log("[VALIDATE] Current validationState before update:", JSON.stringify({
+                isValidating: validationState.isValidating,
+                hasResult: !!validationState.result,
+                rulesCount: validationState.rules?.length
+            }));
+
+            // Try direct state update instead of functional update
+            setValidationState({
+                isValidating: false,
+                result: { ...result },
+                progress: null,
+                rules: validationState.rules, // Preserve existing rules
+                error: null
+            });
+
+            console.log("[VALIDATE] After setValidationState call");
 
             return result;
         } catch (err) {
-            // Handle error locally instead of re-throwing
-            setValidationProgress(null);
-            console.error('[TaskPanel] Validation error:', err);
-            setValidationResult({
-                success: false,
-                message: err.message || 'Validation failed due to an unexpected error',
-                details: []
-            });
-        } finally {
-            setValidating(false);
-        }
-    }, [sessionId, validateTask]);
+            console.error('[VALIDATE] Validation error:', err);
 
-    // Toggle hint visibility
+            // Handle error case
+            setValidationState(prev => ({
+                ...prev,
+                isValidating: false,
+                progress: null,
+                error: err.message || 'Validation failed due to an unexpected error',
+                result: {
+                    success: false,
+                    message: err.message || 'Validation failed due to an unexpected error',
+                    details: []
+                }
+            }));
+
+            return null;
+        } finally {
+            // Ensure interval and timeout are cleared
+            if (progressInterval) {
+                clearInterval(progressInterval);
+            }
+            if (progressTimeout) {
+                clearTimeout(progressTimeout);
+            }
+        }
+    }, [sessionId, validateTask, scenario, validationStages]);
+
     const toggleHint = (taskId) => {
         setShowHints(prev => ({
             ...prev,
@@ -203,7 +329,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         }));
     };
 
-    // Get task status
     const getTaskStatus = (taskId) => {
         if (!session || !session.tasks) return 'pending';
 
@@ -211,8 +336,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         return task ? task.status : 'pending';
     };
 
-    // Hooks
-    // Fetch scenario data
+    // Fetch scenario effect
     useEffect(() => {
         const fetchScenario = async () => {
             if (!scenarioId) return;
@@ -225,6 +349,18 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 }
                 const data = await response.json();
                 setScenario(data);
+
+                // Initialize validation state with rules from the first task
+                if (data && data.tasks && data.tasks.length > 0) {
+                    const initialTask = data.tasks[0];
+                    if (initialTask.validation) {
+                        setValidationState(prev => ({
+                            ...prev,
+                            rules: initialTask.validation
+                        }));
+                    }
+                }
+
                 setError(null);
             } catch (err) {
                 setError(err.message || 'Failed to load scenario details');
@@ -238,25 +374,32 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     }, [scenarioId]);
 
     useEffect(() => {
-        const fetchValidationRules = async () => {
-            if (!scenario || !scenario.tasks || scenario.tasks.length === 0) return;
+        if (!scenario || !scenario.tasks || scenario.tasks.length === 0) return;
 
-            const currentTask = scenario.tasks[activeTaskIndex];
-            if (!currentTask) return;
+        // Get the current task
+        const currentTask = scenario.tasks[activeTaskIndex];
+        if (!currentTask) return;
 
-            try {
-                // Extract validation info from the scenario data
-                const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
-                if (taskFromScenario && taskFromScenario.validation) {
-                    setValidationRules(taskFromScenario.validation);
-                    console.log('Validation rules:', taskFromScenario.validation);
-                }
-            } catch (err) {
-                console.error('Error fetching validation rules:', err);
-            }
-        };
+        // Clear previous validation results when changing tasks
+        setValidationState(prev => ({
+            ...prev,
+            result: null,
+            error: null
+        }));
 
-        fetchValidationRules();
+        // Extract validation rules from the scenario data
+        const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
+        if (taskFromScenario && taskFromScenario.validation) {
+            setValidationState(prev => ({
+                ...prev,
+                rules: taskFromScenario.validation
+            }));
+        } else {
+            setValidationState(prev => ({
+                ...prev,
+                rules: []
+            }));
+        }
     }, [activeTaskIndex, scenario]);
 
     if (loading) {
@@ -289,6 +432,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         );
     }
     const currentTask = tasks[activeTaskIndex];
+
     return (
         <div className="flex flex-col h-full bg-white">
             {/* Mobile toggle for task list */}
@@ -382,37 +526,91 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                         </div>
                     )}
                     {/* Validation progress */}
-                    {validating && validationProgress && (
+                    {validationState.isValidating && validationState.progress && (
                         <ValidationProgress
-                            stages={validationProgress.stages}
-                            currentStage={validationProgress.currentStage}
+                            stages={validationState.progress.stages}
+                            currentStage={validationState.progress.currentStage}
                         />
                     )}
                     {/* Validation results */}
-                    {validationResult && (
-                        <ValidationResult
-                            result={validationResult}
-                            onRetry={() => handleValidateTask(currentTask.id)}
-                            scenarioId={scenarioId}
-                        />
-                    )}
-                    {validationRules && validationRules.length > 0 && (
-                        <div className="mb-6">
-
-                            <div>
-                                {/* Debug information to verify data */}
-                                {validationResult && (
-                                    <div className="text-xs text-gray-500 mb-2">
-                                        Validation completed: {validationResult.success ? 'Success' : 'Failed'}
-                                        ({validationResult.details?.length || 0} details)
+                    {/* Validation results debug section */}
+                    {validationState.result && (
+                        <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs">
+                            <details>
+                                <summary className="cursor-pointer font-medium">Debug Info</summary>
+                                <div className="mt-2 space-y-3">
+                                    <div>
+                                        <h4 className="font-medium">Result Overview:</h4>
+                                        <div className="p-1 bg-white rounded mt-1">
+                                            <pre className="whitespace-pre-wrap">
+                                                {JSON.stringify({
+                                                    taskId: currentTask.id,
+                                                    success: validationState.result.success,
+                                                    message: validationState.result.message,
+                                                    detailsCount: validationState.result.details?.length || 0
+                                                }, null, 2)}
+                                            </pre>
+                                        </div>
                                     </div>
-                                )}
 
-                                <ValidationObjectives
-                                    rules={validationRules}
-                                    validationResult={validationResult || null}
-                                />
-                            </div>
+                                    <div>
+                                        <h4 className="font-medium">Result Details:</h4>
+                                        <div className="p-1 bg-white rounded mt-1">
+                                            <pre className="whitespace-pre-wrap">
+                                                {JSON.stringify(validationState.result.details?.map(d => ({
+                                                    rule: d.rule,
+                                                    passed: d.passed,
+                                                    message: d.message?.substring(0, 50) + (d.message?.length > 50 ? '...' : '')
+                                                })), null, 2)}
+                                            </pre>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h4 className="font-medium">Validation Rules:</h4>
+                                        <div className="p-1 bg-white rounded mt-1">
+                                            <pre className="whitespace-pre-wrap">
+                                                {JSON.stringify(validationState.rules?.map(r => ({
+                                                    id: r.id,
+                                                    type: r.type
+                                                })), null, 2)}
+                                            </pre>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <h4 className="font-medium">Rule-Result Matching:</h4>
+                                        <div className="p-1 bg-white rounded mt-1">
+                                            <pre className="whitespace-pre-wrap">
+                                                {JSON.stringify(validationState.rules?.map(rule => {
+                                                    const detail = validationState.result.details?.find(d => d.rule === rule.id);
+                                                    return {
+                                                        ruleId: rule.id,
+                                                        hasMatchingResult: !!detail,
+                                                        resultStatus: detail ? (detail.passed ? 'passed' : 'failed') : 'no match'
+                                                    };
+                                                }), null, 2)}
+                                            </pre>
+                                        </div>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    )}
+                    {console.log("[TASK_PANEL] ValidationObjectives render check:", {
+                        hasRules: !!validationState.rules?.length,
+                        rulesCount: validationState.rules?.length || 0,
+                        hasResult: !!validationState.result,
+                        resultSuccess: validationState.result?.success,
+                        detailsCount: validationState.result?.details?.length || 0
+                    })}
+                    {validationState.rules && validationState.rules.length > 0 && (
+                        <div className="mb-6">
+                            {console.log("[TASK_PANEL] ValidationObjectives will render")}
+                            <ValidationObjectives
+                                rules={validationState.rules}
+                                validationResult={validationState.result}
+                            />
                         </div>
                     )}
                     {/* Validation button */}
@@ -421,11 +619,11 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             type="button"
                             variant="primary"
                             onClick={() => handleValidateTask(currentTask.id)}
-                            isLoading={validating}
-                            disabled={validating || getTaskStatus(currentTask.id) === 'completed'}
+                            isLoading={validationState.isValidating}
+                            disabled={validationState.isValidating || getTaskStatus(currentTask.id) === 'completed'}
                             className="w-full sm:w-auto"
                         >
-                            {validating ? 'Validating...' : 'Validate Task'}
+                            {validationState.isValidating ? 'Validating...' : 'Validate Task'}
                         </Button>
                     </div>
                 </div>
