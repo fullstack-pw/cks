@@ -47,6 +47,9 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
     //Helper functions
     const ValidationObjectives = ({ rules, validationResult }) => {
+        console.log("ValidationObjectives component RENDER ATTEMPT");
+        console.log("ValidationObjectives - rules received:", rules);
+        console.log("ValidationObjectives - validationResult received:", validationResult);
         if (!rules || rules.length === 0) return null;
 
         console.log("ValidationObjectives received validationResult:", validationResult);
@@ -56,7 +59,8 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             if (!validationResult || !validationResult.details) return null;
             return validationResult.details.find(detail => detail.rule === ruleId);
         };
-
+        console.log("ValidationObjectives received rules:", rules);
+        console.log("ValidationObjectives received validationResult:", validationResult);
         return (
             <Card className="mb-6 border-blue-200 bg-blue-50">
                 <div className="p-4">
@@ -169,18 +173,13 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 });
             }, 1000);
 
+
             const result = await validateTask(sessionId, taskId);
-
-            clearInterval(progressInterval);
-            setValidationProgress(null);
-
-            // Add debug logging
             console.log('[TaskPanel] Validation result:', result);
             console.log('[TaskPanel] Validation details:', result.details);
 
+            // Set both states in one update block
             setValidationResult(result);
-
-            // Automatically show objectives when validation completes
             setShowObjectives(true);
 
             return result;
@@ -415,6 +414,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
                             {showObjectives && (
                                 <div>
+                                    {console.log('[TaskPanel] showObjectives is true, should render component')}
                                     {/* Debug information to verify data */}
                                     {validationResult && (
                                         <div className="text-xs text-gray-500 mb-2">
@@ -425,7 +425,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
                                     <ValidationObjectives
                                         rules={validationRules}
-                                        validationResult={validationResult}
+                                        validationResult={validationResult || null}
                                     />
                                 </div>
                             )}
