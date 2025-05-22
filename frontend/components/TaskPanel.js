@@ -23,6 +23,8 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showAllTasks, setShowAllTasks] = useState(false);
+    const currentValidationRequestRef = useRef(null);
+
     const getValidationObjectiveDescription = (rule) => {
         switch (rule.type) {
             case 'resource_exists':
@@ -55,6 +57,14 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         rules: null,
         error: null
     });
+
+    const memoizedValidationRules = useMemo(() => {
+        return validationState.rules;
+    }, [validationState.rules]);
+
+    const memoizedValidationResult = useMemo(() => {
+        return validationState.result;
+    }, [validationState.result]);
 
     const ValidationObjectives = React.memo(({ rules, validationResult }) => {
         // Keep important state change logging
@@ -228,6 +238,10 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             event.stopPropagation();
         }
 
+        // Generate a unique request ID for this validation
+        const requestId = `${taskId}-${Date.now()}`;
+        currentValidationRequestRef.current = requestId;
+
         // Get validation rules upfront before starting validation
         let rules = [];
         if (scenario && scenario.tasks) {
@@ -247,18 +261,21 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         try {
             // Create progress simulation interval
             progressInterval = setInterval(() => {
-                setValidationState(prev => {
-                    if (!prev.progress || prev.progress.currentStage >= prev.progress.stages.length - 1) {
-                        return prev;
-                    }
-                    return {
-                        ...prev,
-                        progress: {
-                            ...prev.progress,
-                            currentStage: prev.progress.currentStage + 1
-                        }
-                    };
-                });
+                // Check if this is still the current validation request
+                if (currentValidationRequestRef.current !== requestId) {
+                    clearInterval(progressInterval);
+                    return;
+                }
+                setValidationState(prev => ({
+                    ...prev,
+                    isValidating: true,
+                    progress: {
+                        stages: validationStages,
+                        currentStage: 0
+                    },
+                    rules: rules.length > 0 ? rules : prev.rules, // Use new rules if available, otherwise keep existing
+                    error: null
+                }));
             }, 1000);
 
             // Set a maximum timeout for validation (30 seconds)
@@ -282,14 +299,20 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 rulesCount: validationState.rules?.length
             }));
 
-            // Try direct state update instead of functional update
-            setValidationState({
+            // Only update if this is still the current validation request
+            if (currentValidationRequestRef.current !== requestId) {
+                console.log("[VALIDATE] Validation result ignored - newer validation in progress");
+                return result;
+            }
+
+            // Use functional update to ensure we preserve the current rules
+            setValidationState(prev => ({
                 isValidating: false,
                 result: { ...result },
                 progress: null,
-                rules: validationState.rules, // Preserve existing rules
+                rules: prev.rules, // Preserve existing rules from current state
                 error: null
-            });
+            }));
 
             console.log("[VALIDATE] After setValidationState call");
 
@@ -297,11 +320,17 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         } catch (err) {
             console.error('[VALIDATE] Validation error:', err);
 
+            if (currentValidationRequestRef.current !== requestId) {
+                console.log("[VALIDATE] Validation error ignored - newer validation in progress");
+                return null;
+            }
+
             // Handle error case
             setValidationState(prev => ({
                 ...prev,
                 isValidating: false,
                 progress: null,
+                rules: prev.rules, // Explicitly preserve rules
                 error: err.message || 'Validation failed due to an unexpected error',
                 result: {
                     success: false,
@@ -380,26 +409,18 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         const currentTask = scenario.tasks[activeTaskIndex];
         if (!currentTask) return;
 
-        // Clear previous validation results when changing tasks
-        setValidationState(prev => ({
-            ...prev,
-            result: null,
-            error: null
-        }));
+        // Only clear validation results if we're actually changing to a different task
+        setValidationState(prev => {
+            const isTaskChange = prev.currentTaskId && prev.currentTaskId !== currentTask.id;
 
-        // Extract validation rules from the scenario data
-        const taskFromScenario = scenario.tasks.find(t => t.id === currentTask.id);
-        if (taskFromScenario && taskFromScenario.validation) {
-            setValidationState(prev => ({
+            return {
                 ...prev,
-                rules: taskFromScenario.validation
-            }));
-        } else {
-            setValidationState(prev => ({
-                ...prev,
-                rules: []
-            }));
-        }
+                currentTaskId: currentTask.id,
+                result: isTaskChange ? null : prev.result, // Keep result if same task
+                error: isTaskChange ? null : prev.error,   // Keep error if same task
+                rules: currentTask.validation || []
+            };
+        });
     }, [activeTaskIndex, scenario]);
 
     if (loading) {
@@ -604,12 +625,13 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                         resultSuccess: validationState.result?.success,
                         detailsCount: validationState.result?.details?.length || 0
                     })}
-                    {validationState.rules && validationState.rules.length > 0 && (
+                    {memoizedValidationRules && memoizedValidationRules.length > 0 && (
                         <div className="mb-6">
                             {console.log("[TASK_PANEL] ValidationObjectives will render")}
                             <ValidationObjectives
-                                rules={validationState.rules}
-                                validationResult={validationState.result}
+                                key={`validation-objectives-${currentTask.id}`}
+                                rules={memoizedValidationRules}
+                                validationResult={memoizedValidationResult}
                             />
                         </div>
                     )}
