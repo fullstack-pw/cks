@@ -58,16 +58,8 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         error: null
     });
 
-    const memoizedValidationRules = useMemo(() => {
-        return validationState.rules;
-    }, [validationState.rules]);
-
-    const memoizedValidationResult = useMemo(() => {
-        return validationState.result;
-    }, [validationState.result]);
-
-    const ValidationObjectives = React.memo(({ rules, validationResult }) => {
-        // Keep important state change logging
+    // Simplified ValidationObjectives component without React.memo
+    const ValidationObjectives = ({ rules, validationResult }) => {
         console.log("[VALIDATION_OBJECTIVES] Rendering with:", {
             hasRules: !!rules?.length,
             rulesCount: rules?.length || 0,
@@ -76,21 +68,6 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             resultDetails: validationResult?.details?.length || 0,
             resultDetailsRules: validationResult?.details?.map(d => d.rule) || []
         });
-
-        // Add effect to log when validation results are updated
-        useEffect(() => {
-            if (validationResult && validationResult.details && validationResult.details.length > 0) {
-                // Log only when validation results are available and change
-                console.log("[VALIDATION_OBJECTIVES] Validation results updated:", {
-                    success: validationResult.success,
-                    detailsCount: validationResult.details.length,
-                    details: validationResult.details.map(d => ({
-                        rule: d.rule,
-                        passed: d.passed
-                    }))
-                });
-            }
-        }, [validationResult]);
 
         if (!rules || rules.length === 0) {
             console.log("ValidationObjectives - No rules to display");
@@ -196,40 +173,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 </div>
             </Card>
         );
-    }, (prevProps, nextProps) => {
-        // If either validationResult is null but the other isn't
-        if ((!prevProps.validationResult && nextProps.validationResult) ||
-            (prevProps.validationResult && !nextProps.validationResult)) {
-            console.log("[VALIDATION_OBJECTIVES] Re-render due to validation result existence change");
-            return false; // Re-render if validation result existence changes
-        }
-
-        // Rules changed in length or content
-        const rulesChanged = prevProps.rules?.length !== nextProps.rules?.length ||
-            JSON.stringify(prevProps.rules?.map(r => r.id)) !==
-            JSON.stringify(nextProps.rules?.map(r => r.id));
-
-        // If validation results exist, check for meaningful changes
-        const resultChanged = prevProps.validationResult && nextProps.validationResult && (
-            // Success state changed
-            prevProps.validationResult.success !== nextProps.validationResult.success ||
-            // Details length changed
-            prevProps.validationResult.details?.length !== nextProps.validationResult.details?.length ||
-            // Detail pass/fail statuses changed
-            JSON.stringify(prevProps.validationResult.details?.map(d => ({ rule: d.rule, passed: d.passed }))) !==
-            JSON.stringify(nextProps.validationResult.details?.map(d => ({ rule: d.rule, passed: d.passed })))
-        );
-
-        console.log("[VALIDATION_OBJECTIVES] shouldUpdate:", {
-            rulesChanged,
-            resultChanged,
-            shouldUpdate: rulesChanged || resultChanged
-        });
-
-        // Note: React.memo returns true when it should NOT re-render, so we return
-        // false when we detect changes that SHOULD trigger a re-render
-        return !(rulesChanged || resultChanged);
-    });
+    };
 
     // Enhanced task validation handler
     const handleValidateTask = useCallback(async (taskId, event) => {
@@ -252,13 +196,25 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             }
         }
 
-        // Try direct state update instead of functional update
-        console.log("[VALIDATE] Initial validation state set, rules:", rules.length);
-
         let progressInterval;
         let progressTimeout;
+        let currentStage = 0;
 
         try {
+            console.log("[VALIDATE] Starting validation with rules:", rules.length);
+
+            // Set initial validation state
+            setValidationState({
+                isValidating: true,
+                result: null, // Clear previous result
+                progress: {
+                    stages: validationStages,
+                    currentStage: 0
+                },
+                rules: rules,
+                error: null
+            });
+
             // Create progress simulation interval
             progressInterval = setInterval(() => {
                 // Check if this is still the current validation request
@@ -266,15 +222,14 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                     clearInterval(progressInterval);
                     return;
                 }
+
+                currentStage = Math.min(currentStage + 1, validationStages.length - 1);
                 setValidationState(prev => ({
                     ...prev,
-                    isValidating: true,
                     progress: {
                         stages: validationStages,
-                        currentStage: 0
-                    },
-                    rules: rules.length > 0 ? rules : prev.rules, // Use new rules if available, otherwise keep existing
-                    error: null
+                        currentStage: currentStage
+                    }
                 }));
             }, 1000);
 
@@ -290,14 +245,12 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 validateTask(sessionId, taskId),
                 timeoutPromise
             ]);
-            console.log("[VALIDATE] Validation result received:", JSON.stringify(result));
 
-            // Log the current validation state before update
-            console.log("[VALIDATE] Current validationState before update:", JSON.stringify({
-                isValidating: validationState.isValidating,
-                hasResult: !!validationState.result,
-                rulesCount: validationState.rules?.length
-            }));
+            console.log("[VALIDATE] Validation result received:", {
+                success: result?.success,
+                detailsCount: result?.details?.length,
+                details: result?.details?.map(d => ({ rule: d.rule, passed: d.passed }))
+            });
 
             // Only update if this is still the current validation request
             if (currentValidationRequestRef.current !== requestId) {
@@ -305,17 +258,17 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 return result;
             }
 
-            // Use functional update to ensure we preserve the current rules
-            setValidationState(prev => ({
+            // Update state with result - force re-render by creating new object
+            console.log("[VALIDATE] Updating validation state with result");
+            setValidationState({
                 isValidating: false,
-                result: { ...result },
+                result: result, // Set the result directly
                 progress: null,
-                rules: prev.rules, // Preserve existing rules from current state
+                rules: rules, // Keep the rules
                 error: null
-            }));
+            });
 
-            console.log("[VALIDATE] After setValidationState call");
-
+            console.log("[VALIDATE] State updated successfully");
             return result;
         } catch (err) {
             console.error('[VALIDATE] Validation error:', err);
@@ -326,18 +279,17 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             }
 
             // Handle error case
-            setValidationState(prev => ({
-                ...prev,
+            setValidationState({
                 isValidating: false,
-                progress: null,
-                rules: prev.rules, // Explicitly preserve rules
-                error: err.message || 'Validation failed due to an unexpected error',
                 result: {
                     success: false,
                     message: err.message || 'Validation failed due to an unexpected error',
                     details: []
-                }
-            }));
+                },
+                progress: null,
+                rules: rules,
+                error: err.message || 'Validation failed due to an unexpected error'
+            });
 
             return null;
         } finally {
@@ -546,6 +498,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             )}
                         </div>
                     )}
+
                     {/* Validation progress */}
                     {validationState.isValidating && validationState.progress && (
                         <ValidationProgress
@@ -553,88 +506,26 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                             currentStage={validationState.progress.currentStage}
                         />
                     )}
-                    {/* Validation results */}
-                    {/* Validation results debug section */}
-                    {validationState.result && (
-                        <div className="mt-4 p-3 bg-gray-50 rounded-lg text-xs">
-                            <details>
-                                <summary className="cursor-pointer font-medium">Debug Info</summary>
-                                <div className="mt-2 space-y-3">
-                                    <div>
-                                        <h4 className="font-medium">Result Overview:</h4>
-                                        <div className="p-1 bg-white rounded mt-1">
-                                            <pre className="whitespace-pre-wrap">
-                                                {JSON.stringify({
-                                                    taskId: currentTask.id,
-                                                    success: validationState.result.success,
-                                                    message: validationState.result.message,
-                                                    detailsCount: validationState.result.details?.length || 0
-                                                }, null, 2)}
-                                            </pre>
-                                        </div>
-                                    </div>
 
-                                    <div>
-                                        <h4 className="font-medium">Result Details:</h4>
-                                        <div className="p-1 bg-white rounded mt-1">
-                                            <pre className="whitespace-pre-wrap">
-                                                {JSON.stringify(validationState.result.details?.map(d => ({
-                                                    rule: d.rule,
-                                                    passed: d.passed,
-                                                    message: d.message?.substring(0, 50) + (d.message?.length > 50 ? '...' : '')
-                                                })), null, 2)}
-                                            </pre>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <h4 className="font-medium">Validation Rules:</h4>
-                                        <div className="p-1 bg-white rounded mt-1">
-                                            <pre className="whitespace-pre-wrap">
-                                                {JSON.stringify(validationState.rules?.map(r => ({
-                                                    id: r.id,
-                                                    type: r.type
-                                                })), null, 2)}
-                                            </pre>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <h4 className="font-medium">Rule-Result Matching:</h4>
-                                        <div className="p-1 bg-white rounded mt-1">
-                                            <pre className="whitespace-pre-wrap">
-                                                {JSON.stringify(validationState.rules?.map(rule => {
-                                                    const detail = validationState.result.details?.find(d => d.rule === rule.id);
-                                                    return {
-                                                        ruleId: rule.id,
-                                                        hasMatchingResult: !!detail,
-                                                        resultStatus: detail ? (detail.passed ? 'passed' : 'failed') : 'no match'
-                                                    };
-                                                }), null, 2)}
-                                            </pre>
-                                        </div>
-                                    </div>
-                                </div>
-                            </details>
-                        </div>
-                    )}
-                    {console.log("[TASK_PANEL] ValidationObjectives render check:", {
-                        hasRules: !!validationState.rules?.length,
-                        rulesCount: validationState.rules?.length || 0,
-                        hasResult: !!validationState.result,
-                        resultSuccess: validationState.result?.success,
-                        detailsCount: validationState.result?.details?.length || 0
-                    })}
-                    {memoizedValidationRules && memoizedValidationRules.length > 0 && (
+                    {/* ValidationObjectives - now renders properly */}
+                    {validationState.rules && validationState.rules.length > 0 && (
                         <div className="mb-6">
-                            {console.log("[TASK_PANEL] ValidationObjectives will render")}
                             <ValidationObjectives
-                                key={`validation-objectives-${currentTask.id}`}
-                                rules={memoizedValidationRules}
-                                validationResult={memoizedValidationResult}
+                                rules={validationState.rules}
+                                validationResult={validationState.result}
                             />
                         </div>
                     )}
+
+                    {/* Overall validation result */}
+                    {validationState.result && (
+                        <ValidationResult
+                            result={validationState.result}
+                            onRetry={() => handleValidateTask(currentTask.id)}
+                            scenarioId={scenarioId}
+                        />
+                    )}
+
                     {/* Validation button */}
                     <div className="pt-4">
                         <Button
