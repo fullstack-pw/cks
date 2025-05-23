@@ -43,10 +43,18 @@ const (
 
 // TaskStatus represents the status of a task in a scenario
 type TaskStatus struct {
-	ID             string    `json:"id"`
-	Status         string    `json:"status"` // "pending", "completed", "failed"
-	ValidationTime time.Time `json:"validationTime,omitempty"`
-	Message        string    `json:"message,omitempty"`
+	ID               string            `json:"id"`
+	Status           string            `json:"status"` // "pending", "completed", "failed"
+	ValidationTime   time.Time         `json:"validationTime,omitempty"`
+	Message          string            `json:"message,omitempty"`
+	ValidationResult *ValidationResult `json:"validationResult,omitempty"` // NEW
+}
+
+type ValidationResult struct {
+	Success   bool               `json:"success"`
+	Message   string             `json:"message"`
+	Details   []ValidationDetail `json:"details"`
+	Timestamp time.Time          `json:"timestamp"`
 }
 
 // Scenario represents a CKS practice scenario

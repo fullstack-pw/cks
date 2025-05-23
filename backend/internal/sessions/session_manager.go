@@ -423,13 +423,14 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		status = "completed"
 	}
 
-	err = sm.UpdateTaskStatus(sessionID, taskID, status)
+	// Store validation result in session - NEW FUNCTIONALITY
+	err = sm.UpdateTaskValidationResult(sessionID, taskID, status, result)
 	if err != nil {
 		sm.logger.WithError(err).WithFields(logrus.Fields{
 			"sessionID": sessionID,
 			"taskID":    taskID,
 			"status":    status,
-		}).Error("Failed to update task status after validation")
+		}).Error("Failed to update task validation result")
 		// Continue despite error - validation result is more important
 	}
 
@@ -442,6 +443,58 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 	}).Info("Task validation completed")
 
 	return result, nil
+}
+
+// NEW METHOD: Store validation results in session
+func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, status string, validationResult *models.ValidationResponse) error {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	session, ok := sm.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Find task and update status and validation result
+	found := false
+	for i, task := range session.Tasks {
+		if task.ID == taskID {
+			session.Tasks[i].Status = status
+			session.Tasks[i].ValidationTime = time.Now()
+			session.Tasks[i].ValidationResult = &models.ValidationResult{
+				Success:   validationResult.Success,
+				Message:   validationResult.Message,
+				Details:   validationResult.Details,
+				Timestamp: time.Now(),
+			}
+			found = true
+			break
+		}
+	}
+
+	// Task not found, add it
+	if !found {
+		session.Tasks = append(session.Tasks, models.TaskStatus{
+			ID:             taskID,
+			Status:         status,
+			ValidationTime: time.Now(),
+			ValidationResult: &models.ValidationResult{
+				Success:   validationResult.Success,
+				Message:   validationResult.Message,
+				Details:   validationResult.Details,
+				Timestamp: time.Now(),
+			},
+		})
+	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"taskID":    taskID,
+		"status":    status,
+		"success":   validationResult.Success,
+	}).Info("Task validation result stored in session")
+
+	return nil
 }
 
 // RegisterTerminalSession registers a terminal session for a VM

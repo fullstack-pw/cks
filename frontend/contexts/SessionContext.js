@@ -57,40 +57,17 @@ export const SessionProvider = ({ children }) => {
             setLoading(true);
             setError(null);
 
-            // Optimistic update: mark task as validating
-            mutate(`/sessions/${sessionId}`, (current) => {
-                if (!current || !current.tasks) return current;
-
-                return {
-                    ...current,
-                    tasks: current.tasks.map(task =>
-                        task.id === taskId
-                            ? { ...task, status: 'validating' }
-                            : task
-                    )
-                };
-            }, false);
-
-            // Perform validation with abort signal
+            // Perform validation - no optimistic updates needed
             const result = await api.tasks.validate(sessionId, taskId);
 
-            // Update cache with validation result
-            mutate(`/sessions/${sessionId}`, (current) => {
-                if (!current || !current.tasks) return current;
-
-                return {
-                    ...current,
-                    tasks: current.tasks.map(task =>
-                        task.id === taskId
-                            ? { ...task, status: result.success ? 'completed' : 'failed' }
-                            : task
-                    )
-                };
-            }, false);
+            // Revalidate session data to get updated validation results
+            mutate(`/sessions/${sessionId}`);
 
             // Show success toast only for successful validations
             if (result.success) {
                 toast.success('Task validated successfully');
+            } else {
+                toast.error('Task validation failed');
             }
 
             return result;
@@ -104,20 +81,6 @@ export const SessionProvider = ({ children }) => {
                     details: []
                 };
             }
-
-            // Revert optimistic update on error
-            mutate(`/sessions/${sessionId}`, (current) => {
-                if (!current || !current.tasks) return current;
-
-                return {
-                    ...current,
-                    tasks: current.tasks.map(task =>
-                        task.id === taskId
-                            ? { ...task, status: 'pending' } // Revert to previous state
-                            : task
-                    )
-                };
-            }, false);
 
             const processedError = ErrorHandler.handleError(
                 err,
