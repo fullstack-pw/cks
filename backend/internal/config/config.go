@@ -23,14 +23,17 @@ type Config struct {
 	CleanupIntervalMinutes int
 
 	// VM settings
-	TemplatePath      string
-	KubernetesVersion string
-	VMCPUCores        string
-	VMMemory          string
-	VMStorageSize     string
-	VMStorageClass    string
-	VMImageURL        string
-	PodCIDR           string
+	TemplatePath         string
+	KubernetesVersion    string
+	VMCPUCores           string
+	VMMemory             string
+	VMStorageSize        string
+	VMStorageClass       string
+	VMImageURL           string
+	PodCIDR              string
+	GoldenImageName      string // Name of the golden image PVC
+	GoldenImageNamespace string // Namespace where golden images are stored
+	ValidateGoldenImage  bool   // Whether to validate image exists before VM creation
 
 	// Scenario settings
 	ScenariosPath string
@@ -52,14 +55,17 @@ func LoadConfig() (*Config, error) {
 		CleanupIntervalMinutes: getEnvAsInt("CLEANUP_INTERVAL_MINUTES", 5),
 
 		// VM defaults
-		TemplatePath:      getEnv("TEMPLATE_PATH", "templates"),
-		KubernetesVersion: getEnv("KUBERNETES_VERSION", "1.33.0"),
-		VMCPUCores:        getEnv("VM_CPU_CORES", "2"),
-		VMMemory:          getEnv("VM_MEMORY", "2Gi"),
-		VMStorageSize:     getEnv("VM_STORAGE_SIZE", "30Gi"),
-		VMStorageClass:    getEnv("VM_STORAGE_CLASS", "local-path"),
-		VMImageURL:        getEnv("VM_IMAGE_URL", "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"),
-		PodCIDR:           getEnv("POD_CIDR", "10.0.0.0/8"),
+		TemplatePath:         getEnv("TEMPLATE_PATH", "templates"),
+		KubernetesVersion:    getEnv("KUBERNETES_VERSION", "1.33.0"),
+		VMCPUCores:           getEnv("VM_CPU_CORES", "2"),
+		VMMemory:             getEnv("VM_MEMORY", "2Gi"),
+		VMStorageSize:        getEnv("VM_STORAGE_SIZE", "30Gi"),
+		VMStorageClass:       getEnv("VM_STORAGE_CLASS", "local-path"),
+		VMImageURL:           getEnv("VM_IMAGE_URL", "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"),
+		PodCIDR:              getEnv("POD_CIDR", "10.0.0.0/8"),
+		GoldenImageName:      getEnv("GOLDEN_IMAGE_NAME", "golden-image-1-33-0"),
+		GoldenImageNamespace: getEnv("GOLDEN_IMAGE_NAMESPACE", "vm-templates"),
+		ValidateGoldenImage:  getEnvAsBool("VALIDATE_GOLDEN_IMAGE", true),
 
 		// Scenario defaults
 		ScenariosPath: getEnv("SCENARIOS_PATH", "scenarios"),

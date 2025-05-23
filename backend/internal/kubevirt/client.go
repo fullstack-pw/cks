@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -32,6 +34,79 @@ type Client struct {
 	config        *config.Config
 	restConfig    *rest.Config // Store the REST config
 	templateCache map[string]*template.Template
+}
+
+// Retry configuration constants
+const (
+	DefaultMaxRetries   = 3
+	DefaultRetryDelay   = 10 * time.Second
+	DefaultRetryBackoff = 2.0
+	VMReadyTimeout      = 15 * time.Minute
+	VMCreationTimeout   = 10 * time.Minute
+)
+
+// RetryConfig holds retry configuration
+type RetryConfig struct {
+	MaxRetries int
+	Delay      time.Duration
+	Backoff    float64
+}
+
+// getDefaultRetryConfig returns default retry configuration
+func getDefaultRetryConfig() RetryConfig {
+	return RetryConfig{
+		MaxRetries: DefaultMaxRetries,
+		Delay:      DefaultRetryDelay,
+		Backoff:    DefaultRetryBackoff,
+	}
+}
+
+// retryOperation executes an operation with exponential backoff retry
+func (c *Client) retryOperation(ctx context.Context, operationName string, operation func() error) error {
+	config := getDefaultRetryConfig()
+	var lastErr error
+
+	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(float64(config.Delay) * math.Pow(config.Backoff, float64(attempt-1)))
+			logrus.WithFields(logrus.Fields{
+				"operation": operationName,
+				"attempt":   attempt,
+				"delay":     delay,
+			}).Warn("Retrying operation after failure")
+
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("operation cancelled: %w", ctx.Err())
+			case <-time.After(delay):
+				// Continue with retry
+			}
+		}
+
+		err := operation()
+		if err == nil {
+			if attempt > 0 {
+				logrus.WithFields(logrus.Fields{
+					"operation": operationName,
+					"attempt":   attempt,
+				}).Info("Operation succeeded after retry")
+			}
+			return nil
+		}
+
+		lastErr = err
+		logrus.WithError(err).WithFields(logrus.Fields{
+			"operation": operationName,
+			"attempt":   attempt,
+		}).Warn("Operation failed")
+
+		// Don't retry on context cancellation
+		if ctx.Err() != nil {
+			return fmt.Errorf("operation cancelled: %w", ctx.Err())
+		}
+	}
+
+	return fmt.Errorf("operation %s failed after %d attempts: %w", operationName, config.MaxRetries+1, lastErr)
 }
 
 // NewClient creates a new KubeVirt client
@@ -75,55 +150,161 @@ func NewClient(restConfig *rest.Config) (*Client, error) {
 	}, nil
 }
 
+// validateGoldenImage checks if the golden image PVC exists
+func (c *Client) validateGoldenImage(ctx context.Context) error {
+	if !c.config.ValidateGoldenImage {
+		return nil // Skip validation if disabled
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"imageName":      c.config.GoldenImageName,
+		"imageNamespace": c.config.GoldenImageNamespace,
+	}).Info("Validating golden image exists")
+
+	// Check if the PVC exists
+	_, err := c.kubeClient.CoreV1().PersistentVolumeClaims(c.config.GoldenImageNamespace).Get(
+		ctx,
+		c.config.GoldenImageName,
+		metav1.GetOptions{},
+	)
+
+	if err != nil {
+		return fmt.Errorf("golden image PVC '%s' not found in namespace '%s': %w",
+			c.config.GoldenImageName,
+			c.config.GoldenImageNamespace,
+			err)
+	}
+
+	logrus.WithField("imageName", c.config.GoldenImageName).Info("Golden image validation successful")
+	return nil
+}
+
 func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName, workerNodeName string) error {
-	// Add log for tracking
+	// Validate golden image exists before proceeding
+	err := c.validateGoldenImage(ctx)
+	if err != nil {
+		return fmt.Errorf("golden image validation failed: %w", err)
+	}
+
 	logrus.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"controlPlane": controlPlaneName,
 		"workerNode":   workerNodeName,
-	}).Info("Starting VM cluster creation")
+	}).Info("Starting VM cluster creation with enhanced error handling")
 
-	// Create secret with cloud-init data for control plane
-	err := c.createCloudInitSecret(ctx, namespace, controlPlaneName, "control-plane")
+	// Step 1: Create control plane cloud-init secret with retry
+	err = c.retryOperation(ctx, "create-control-plane-secret", func() error {
+		return c.createCloudInitSecret(ctx, namespace, controlPlaneName, "control-plane")
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create control plane cloud-init secret: %v", err)
+		return fmt.Errorf("failed to create control plane cloud-init secret: %w", err)
 	}
-	logrus.Info("Created control plane cloud-init secret")
+	logrus.Info("Control plane cloud-init secret created successfully")
 
-	// Create control plane VM
-	err = c.createVM(ctx, namespace, controlPlaneName, "control-plane")
+	// Step 2: Create control plane VM with retry
+	err = c.retryOperation(ctx, "create-control-plane-vm", func() error {
+		return c.createVM(ctx, namespace, controlPlaneName, "control-plane")
+	})
 	if err != nil {
-		return fmt.Errorf("failed to create control plane VM: %v", err)
+		return fmt.Errorf("failed to create control plane VM: %w", err)
 	}
-	logrus.Info("Created control plane VM")
+	logrus.Info("Control plane VM created successfully")
 
-	// Wait for control plane to be ready before creating worker
-	err = c.WaitForVMReady(ctx, namespace, controlPlaneName)
+	// Step 3: Wait for control plane to be ready with timeout
+	controlPlaneCtx, cancelCP := context.WithTimeout(ctx, VMReadyTimeout)
+	defer cancelCP()
+
+	err = c.WaitForVMReady(controlPlaneCtx, namespace, controlPlaneName)
 	if err != nil {
-		return fmt.Errorf("control plane VM failed to become ready: %v", err)
+		// Try to cleanup on failure
+		cleanupErr := c.cleanupFailedVM(ctx, namespace, controlPlaneName)
+		if cleanupErr != nil {
+			logrus.WithError(cleanupErr).Error("Failed to cleanup control plane VM after creation failure")
+		}
+		return fmt.Errorf("control plane VM failed to become ready: %w", err)
 	}
 	logrus.Info("Control plane VM is ready")
 
-	// Get join command from control plane
-	joinCommand, err := c.getJoinCommand(ctx, namespace, controlPlaneName)
-	if err != nil {
-		return fmt.Errorf("failed to get join command: %v", err)
-	}
-
-	// Create secret with cloud-init data for worker node
-	err = c.createCloudInitSecret(ctx, namespace, workerNodeName, "worker", map[string]string{
-		"JOIN_COMMAND":           joinCommand,
-		"JOIN":                   joinCommand,
-		"CONTROL_PLANE_ENDPOINT": fmt.Sprintf("%s.%s.pod.cluster.local", strings.ReplaceAll(c.getVMIP(ctx, namespace, controlPlaneName), ".", "-"), namespace),
-		"CONTROL_PLANE_IP":       c.getVMIP(ctx, namespace, controlPlaneName),
-		"CONTROL_PLANE_VM_NAME":  controlPlaneName,
+	// Step 4: Get join command with retry
+	var joinCommand string
+	err = c.retryOperation(ctx, "get-join-command", func() error {
+		var cmdErr error
+		joinCommand, cmdErr = c.getJoinCommand(ctx, namespace, controlPlaneName)
+		return cmdErr
 	})
 	if err != nil {
-		return fmt.Errorf("failed to create worker node cloud-init secret: %v", err)
+		return fmt.Errorf("failed to get join command: %w", err)
 	}
 
-	// Create worker node VM
-	return c.createVM(ctx, namespace, workerNodeName, "worker")
+	// Step 5: Create worker node cloud-init secret with join command
+	err = c.retryOperation(ctx, "create-worker-secret", func() error {
+		return c.createCloudInitSecret(ctx, namespace, workerNodeName, "worker", map[string]string{
+			"JOIN_COMMAND":           joinCommand,
+			"JOIN":                   joinCommand,
+			"CONTROL_PLANE_ENDPOINT": fmt.Sprintf("%s.%s.pod.cluster.local", strings.ReplaceAll(c.getVMIP(ctx, namespace, controlPlaneName), ".", "-"), namespace),
+			"CONTROL_PLANE_IP":       c.getVMIP(ctx, namespace, controlPlaneName),
+			"CONTROL_PLANE_VM_NAME":  controlPlaneName,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create worker node cloud-init secret: %w", err)
+	}
+
+	// Step 6: Create worker node VM with retry
+	err = c.retryOperation(ctx, "create-worker-vm", func() error {
+		return c.createVM(ctx, namespace, workerNodeName, "worker")
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create worker node VM: %w", err)
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"namespace":    namespace,
+		"controlPlane": controlPlaneName,
+		"workerNode":   workerNodeName,
+	}).Info("VM cluster creation completed successfully")
+
+	return nil
+}
+
+// cleanupFailedVM cleans up a failed VM and its resources
+func (c *Client) cleanupFailedVM(ctx context.Context, namespace, vmName string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmName":    vmName,
+	}).Info("Cleaning up failed VM")
+
+	var errors []error
+
+	// Delete VM (ignore not found errors)
+	err := c.virtClient.VirtualMachine(namespace).Delete(ctx, vmName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		errors = append(errors, fmt.Errorf("failed to delete VM %s: %w", vmName, err))
+	}
+
+	// Delete DataVolume
+	dvName := fmt.Sprintf("%s-rootdisk", vmName)
+	err = c.virtClient.CdiClient().CdiV1beta1().DataVolumes(namespace).Delete(ctx, dvName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		errors = append(errors, fmt.Errorf("failed to delete DataVolume %s: %w", dvName, err))
+	}
+
+	// Delete cloud-init secret
+	err = c.kubeClient.CoreV1().Secrets(namespace).Delete(ctx, vmName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		errors = append(errors, fmt.Errorf("failed to delete Secret %s: %w", vmName, err))
+	}
+
+	if len(errors) > 0 {
+		var errorMsgs []string
+		for _, e := range errors {
+			errorMsgs = append(errorMsgs, e.Error())
+		}
+		return fmt.Errorf("cleanup errors: %s", strings.Join(errorMsgs, "; "))
+	}
+
+	logrus.WithField("vmName", vmName).Info("VM cleanup completed successfully")
+	return nil
 }
 
 func (c *Client) createCloudInitSecret(ctx context.Context, namespace, vmName, vmType string, extraVars ...map[string]string) error {
@@ -203,17 +384,19 @@ func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string)
 
 	// Create data map for template
 	data := map[string]string{
-		"CONTROL_PLANE_VM_NAME": fmt.Sprintf("cks-control-plane-%s", namespace),
-		"WORKER_VM_NAME":        fmt.Sprintf("cks-worker-node-%s", namespace),
-		"SESSION_NAMESPACE":     namespace,
-		"SESSION_ID":            strings.TrimPrefix(namespace, "user-session-"),
-		"K8S_VERSION":           c.config.KubernetesVersion,
-		"CPU_CORES":             c.config.VMCPUCores,
-		"MEMORY":                c.config.VMMemory,
-		"STORAGE_SIZE":          c.config.VMStorageSize,
-		"STORAGE_CLASS":         c.config.VMStorageClass,
-		"IMAGE_URL":             c.config.VMImageURL,
-		"POD_CIDR":              c.config.PodCIDR,
+		"CONTROL_PLANE_VM_NAME":  fmt.Sprintf("cks-control-plane-%s", namespace),
+		"WORKER_VM_NAME":         fmt.Sprintf("cks-worker-node-%s", namespace),
+		"SESSION_NAMESPACE":      namespace,
+		"SESSION_ID":             strings.TrimPrefix(namespace, "user-session-"),
+		"K8S_VERSION":            c.config.KubernetesVersion,
+		"CPU_CORES":              c.config.VMCPUCores,
+		"MEMORY":                 c.config.VMMemory,
+		"STORAGE_SIZE":           c.config.VMStorageSize,
+		"STORAGE_CLASS":          c.config.VMStorageClass,
+		"IMAGE_URL":              c.config.VMImageURL,
+		"POD_CIDR":               c.config.PodCIDR,
+		"GOLDEN_IMAGE_NAME":      c.config.GoldenImageName,
+		"GOLDEN_IMAGE_NAMESPACE": c.config.GoldenImageNamespace,
 	}
 
 	// Read the VM template file
@@ -245,32 +428,38 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 		"vmName":    vmName,
 	}).Info("Waiting for VM to become ready")
 
+	startTime := time.Now()
 	return wait.PollUntilContextCancel(ctx, 10*time.Second, true, func(context.Context) (bool, error) {
-		// Check VM exists and is running
+		// Check VM exists and get status
 		vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
-			if errors.IsNotFound(err) {
-				logrus.WithField("vmName", vmName).Debug("VM not found yet, retrying...")
+			if k8serrors.IsNotFound(err) {
+				elapsed := time.Since(startTime)
+				logrus.WithFields(logrus.Fields{
+					"vmName":  vmName,
+					"elapsed": elapsed,
+				}).Debug("VM not found yet, continuing to wait...")
 				return false, nil
 			}
-			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VM status")
-			return false, nil // Keep trying despite errors
+			// Log error but continue trying
+			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VM status, retrying...")
+			return false, nil
 		}
 
 		// Log detailed VM status for debugging
 		logrus.WithFields(logrus.Fields{
-			"vmName":    vmName,
-			"running":   vm.Spec.Running,
-			"created":   vm.Status.Created,
-			"ready":     vm.Status.Ready,
-			"condition": vm.Status.Conditions,
+			"vmName":  vmName,
+			"running": vm.Spec.Running,
+			"created": vm.Status.Created,
+			"ready":   vm.Status.Ready,
+			"elapsed": time.Since(startTime),
 		}).Debug("VM status check")
 
-		// Also check VMI status which might have more information
+		// Check VMI status for more detailed information
 		vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
-			if errors.IsNotFound(err) {
-				logrus.WithField("vmName", vmName).Debug("VMI not found yet, VM not fully created, retrying...")
+			if k8serrors.IsNotFound(err) {
+				logrus.WithField("vmName", vmName).Debug("VMI not found yet, VM not fully created")
 				return false, nil
 			}
 			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VMI status")
@@ -279,45 +468,52 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 
 		// Log VMI phase for debugging
 		logrus.WithFields(logrus.Fields{
-			"vmName": vmName,
-			"phase":  vmi.Status.Phase,
-			"reason": vmi.Status.Phase,
+			"vmName":  vmName,
+			"phase":   vmi.Status.Phase,
+			"elapsed": time.Since(startTime),
 		}).Debug("VMI status check")
 
 		// Check if VMI is in Running phase AND VM is marked as ready
 		if vmi.Status.Phase == "Running" && vm.Status.Ready {
-			logrus.WithField("vmName", vmName).Info("VM is ready and running")
+			elapsed := time.Since(startTime)
+			logrus.WithFields(logrus.Fields{
+				"vmName":  vmName,
+				"elapsed": elapsed,
+			}).Info("VM is ready and running")
 			return true, nil
 		}
 
-		// Check if VMI is in Running phase even if VM.Ready isn't true yet
-		// This might indicate the VM is actually ready but the status hasn't updated
+		// Check if VMI is in Running phase for extended period (fallback)
 		if vmi.Status.Phase == "Running" {
-			// If VMI has been running for a while, consider the VM ready despite VM.Ready flag
-			if vmi.Status.PhaseTransitionTimestamps != nil && len(vmi.Status.PhaseTransitionTimestamps) > 0 {
+			if vmi.Status.PhaseTransitionTimestamps != nil {
 				for _, transition := range vmi.Status.PhaseTransitionTimestamps {
 					if transition.Phase == "Running" {
 						runningDuration := time.Since(transition.PhaseTransitionTimestamp.Time)
-						// If VMI has been in Running phase for over 60 seconds, consider it ready
 						if runningDuration > 60*time.Second {
-							logrus.WithField("vmName", vmName).Info("VM has been running for 60+ seconds, considering it ready")
+							logrus.WithFields(logrus.Fields{
+								"vmName":     vmName,
+								"runningFor": runningDuration,
+							}).Info("VM has been running for 60+ seconds, considering it ready")
 							return true, nil
 						}
-						logrus.WithFields(logrus.Fields{
-							"vmName":     vmName,
-							"runningFor": runningDuration.Seconds(),
-						}).Debug("VM is running but not yet considered ready")
-						break
 					}
 				}
 			}
 		}
 
+		// Check for failed states
+		if vmi.Status.Phase == "Failed" {
+			return false, fmt.Errorf("VM %s failed to start: phase is Failed", vmName)
+		}
+
+		// Continue waiting
+		elapsed := time.Since(startTime)
 		logrus.WithFields(logrus.Fields{
 			"vmName":   vmName,
 			"vmiPhase": vmi.Status.Phase,
 			"vmReady":  vm.Status.Ready,
-		}).Debug("VM not ready yet, retrying...")
+			"elapsed":  elapsed,
+		}).Debug("VM not ready yet, continuing to wait...")
 		return false, nil
 	})
 }

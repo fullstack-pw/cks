@@ -68,5 +68,5 @@ spec:
     storageClassName: ${STORAGE_CLASS}
   source:
     pvc:
-      namespace: vm-templates
-      name: golden-image-1-33-0
+      namespace: ${GOLDEN_IMAGE_NAMESPACE}
+      name: ${GOLDEN_IMAGE_NAME}
