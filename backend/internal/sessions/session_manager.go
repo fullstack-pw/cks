@@ -548,6 +548,7 @@ func (sm *SessionManager) UnregisterTerminalSession(sessionID, terminalID string
 	return nil
 }
 
+// provisionEnvironment provisions a Kubernetes environment for a session
 func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *models.Session) error {
 	// Update session status with proper locking
 	if err := sm.UpdateSessionStatus(session.ID, models.SessionStatusProvisioning, ""); err != nil {
@@ -556,84 +557,18 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 
 	sm.logger.WithField("sessionID", session.ID).Info("Provisioning environment")
 
-	// Verify KubeVirt is available
-	err := sm.kubevirtClient.VerifyKubeVirtAvailable(ctx)
-	if err != nil {
-		sm.logger.WithError(err).Error("Failed to verify KubeVirt availability")
-		// Update status to failed
-		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to verify KubeVirt availability: %v", err))
-		return fmt.Errorf("failed to verify KubeVirt availability: %w", err)
+	// Determine which provisioning strategy to use
+	strategy := sm.determineProvisioningStrategy(ctx)
+
+	// Use the appropriate provisioning method based on the strategy
+	switch strategy {
+	case models.StrategySnapshot:
+		return sm.provisionFromSnapshot(ctx, session)
+	case models.StrategyBootstrap:
+		return sm.provisionFromBootstrap(ctx, session)
+	default:
+		return fmt.Errorf("unknown provisioning strategy")
 	}
-
-	// Create namespace
-	namespaceCtx, cancelNamespace := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancelNamespace()
-	err = sm.createNamespace(namespaceCtx, session.Namespace)
-	if err != nil {
-		// Update status to failed
-		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to create namespace: %v", err))
-		return fmt.Errorf("failed to create namespace: %w", err)
-	}
-
-	// Add a short delay to ensure the namespace is fully created
-	time.Sleep(2 * time.Second)
-
-	// Set up resource quotas
-	quotaCtx, cancelQuota := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancelQuota()
-	sm.logger.WithField("namespace", session.Namespace).Info("Setting up resource quotas")
-	err = sm.setupResourceQuotas(quotaCtx, session.Namespace)
-	if err != nil {
-		// Update status to failed
-		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to set up resource quotas: %v", err))
-		return fmt.Errorf("failed to set up resource quotas: %w", err)
-	}
-
-	// Add a short delay to ensure resource quotas are applied
-	time.Sleep(2 * time.Second)
-
-	// Create KubeVirt VMs
-	vmCtx, cancelVM := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancelVM()
-	sm.logger.WithField("sessionID", session.ID).Info("Creating KubeVirt VMs")
-	err = sm.kubevirtClient.CreateCluster(vmCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
-	if err != nil {
-		// Update status to failed
-		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to create VMs: %v", err))
-		return fmt.Errorf("failed to create VMs: %w", err)
-	}
-
-	// Wait for VMs to be ready
-	waitCtx, cancelWait := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancelWait()
-	sm.logger.WithField("sessionID", session.ID).Info("Waiting for VMs to be ready")
-	err = sm.kubevirtClient.WaitForVMsReady(waitCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
-	if err != nil {
-		// Update status to failed
-		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed waiting for VMs: %v", err))
-		return fmt.Errorf("failed waiting for VMs: %w", err)
-	}
-
-	// Initialize scenario resources if defined
-	if session.ScenarioID != "" {
-		scenarioCtx, cancelScenario := context.WithTimeout(ctx, 5*time.Minute)
-		defer cancelScenario()
-		sm.logger.WithField("sessionID", session.ID).Info("Initializing scenario")
-		err = sm.initializeScenario(scenarioCtx, session)
-		if err != nil {
-			// Update status to failed
-			sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to initialize scenario: %v", err))
-			return fmt.Errorf("failed to initialize scenario: %w", err)
-		}
-	}
-
-	// Update final status with proper locking
-	if err := sm.UpdateSessionStatus(session.ID, models.SessionStatusRunning, ""); err != nil {
-		return fmt.Errorf("failed to update session status: %w", err)
-	}
-
-	sm.logger.WithField("sessionID", session.ID).Info("Environment provisioned successfully")
-	return nil
 }
 
 // createNamespace creates a new namespace for the session
@@ -1026,4 +961,129 @@ func (sm *SessionManager) MarkTerminalInactive(sessionID, terminalID string) err
 	}
 
 	return nil
+}
+
+// determineProvisioningStrategy decides whether to use snapshot or bootstrap provisioning
+func (sm *SessionManager) determineProvisioningStrategy(ctx context.Context) models.ProvisioningStrategy {
+	if sm.snapshotsExist(ctx) {
+		sm.logger.Info("Snapshots exist, using snapshot provisioning strategy")
+		return models.StrategySnapshot
+	}
+	sm.logger.Info("Snapshots don't exist, using bootstrap provisioning strategy")
+	return models.StrategyBootstrap
+}
+
+// snapshotsExist checks if required snapshots exist and are ready to use
+func (sm *SessionManager) snapshotsExist(ctx context.Context) bool {
+	// Check if both snapshots exist and are ready
+	controlPlaneExists := sm.checkSnapshotExists(ctx, "cks-control-plane-base-snapshot")
+	workerExists := sm.checkSnapshotExists(ctx, "cks-worker-base-snapshot")
+
+	sm.logger.WithFields(logrus.Fields{
+		"controlPlaneSnapshotExists": controlPlaneExists,
+		"workerSnapshotExists":       workerExists,
+	}).Debug("Snapshot existence check")
+
+	return controlPlaneExists && workerExists
+}
+
+// checkSnapshotExists checks if a specific snapshot exists
+func (sm *SessionManager) checkSnapshotExists(ctx context.Context, snapshotName string) bool {
+	// TODO: Implement actual snapshot check in Phase 3
+	// For now, always return false to use bootstrap strategy
+	sm.logger.WithField("snapshotName", snapshotName).Debug("Checking snapshot existence (placeholder)")
+	return false
+}
+
+// provisionFromBootstrap provisions an environment using the traditional bootstrap process
+func (sm *SessionManager) provisionFromBootstrap(ctx context.Context, session *models.Session) error {
+	sm.logger.WithField("sessionID", session.ID).Info("Provisioning environment using bootstrap method")
+
+	// Verify KubeVirt is available
+	err := sm.kubevirtClient.VerifyKubeVirtAvailable(ctx)
+	if err != nil {
+		sm.logger.WithError(err).Error("Failed to verify KubeVirt availability")
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to verify KubeVirt availability: %v", err))
+		return fmt.Errorf("failed to verify KubeVirt availability: %w", err)
+	}
+
+	// Create namespace
+	namespaceCtx, cancelNamespace := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelNamespace()
+	err = sm.createNamespace(namespaceCtx, session.Namespace)
+	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to create namespace: %v", err))
+		return fmt.Errorf("failed to create namespace: %w", err)
+	}
+
+	// Add a short delay to ensure the namespace is fully created
+	time.Sleep(2 * time.Second)
+
+	// Set up resource quotas
+	quotaCtx, cancelQuota := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelQuota()
+	sm.logger.WithField("namespace", session.Namespace).Info("Setting up resource quotas")
+	err = sm.setupResourceQuotas(quotaCtx, session.Namespace)
+	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to set up resource quotas: %v", err))
+		return fmt.Errorf("failed to set up resource quotas: %w", err)
+	}
+
+	// Add a short delay to ensure resource quotas are applied
+	time.Sleep(2 * time.Second)
+
+	// Create KubeVirt VMs
+	vmCtx, cancelVM := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancelVM()
+	sm.logger.WithField("sessionID", session.ID).Info("Creating KubeVirt VMs")
+	err = sm.kubevirtClient.CreateCluster(vmCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to create VMs: %v", err))
+		return fmt.Errorf("failed to create VMs: %w", err)
+	}
+
+	// Wait for VMs to be ready
+	waitCtx, cancelWait := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancelWait()
+	sm.logger.WithField("sessionID", session.ID).Info("Waiting for VMs to be ready")
+	err = sm.kubevirtClient.WaitForVMsReady(waitCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	if err != nil {
+		// Update status to failed
+		sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed waiting for VMs: %v", err))
+		return fmt.Errorf("failed waiting for VMs: %w", err)
+	}
+
+	// Initialize scenario resources if defined
+	if session.ScenarioID != "" {
+		scenarioCtx, cancelScenario := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancelScenario()
+		sm.logger.WithField("sessionID", session.ID).Info("Initializing scenario")
+		err = sm.initializeScenario(scenarioCtx, session)
+		if err != nil {
+			// Update status to failed
+			sm.UpdateSessionStatus(session.ID, models.SessionStatusFailed, fmt.Sprintf("Failed to initialize scenario: %v", err))
+			return fmt.Errorf("failed to initialize scenario: %w", err)
+		}
+	}
+
+	// Update final status with proper locking
+	if err := sm.UpdateSessionStatus(session.ID, models.SessionStatusRunning, ""); err != nil {
+		return fmt.Errorf("failed to update session status: %w", err)
+	}
+
+	sm.logger.WithField("sessionID", session.ID).Info("Environment provisioned successfully")
+	return nil
+}
+
+// provisionFromSnapshot provisions an environment using KubeVirt snapshots
+func (sm *SessionManager) provisionFromSnapshot(ctx context.Context, session *models.Session) error {
+	sm.logger.WithField("sessionID", session.ID).Info("Snapshot provisioning not yet implemented, falling back to bootstrap")
+
+	// In Phase 4, this will be implemented to create VMs from snapshots
+	// For now, fall back to bootstrap provisioning
+	return sm.provisionFromBootstrap(ctx, session)
 }

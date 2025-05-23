@@ -219,3 +219,22 @@ type SetupCondition struct {
 	Command  string        `json:"command,omitempty"`
 	Timeout  time.Duration `json:"timeout"`
 }
+
+// ProvisioningStrategy represents the strategy used for provisioning VMs
+type ProvisioningStrategy int
+
+const (
+	// StrategyBootstrap uses the traditional bootstrap process to create VMs
+	StrategyBootstrap ProvisioningStrategy = iota
+	// StrategySnapshot uses KubeVirt snapshots to quickly create VMs
+	StrategySnapshot
+)
+
+// SnapshotInfo contains information about a VM snapshot
+type SnapshotInfo struct {
+	SnapshotName string    `json:"snapshotName"`
+	CreatedAt    time.Time `json:"createdAt"`
+	K8sVersion   string    `json:"k8sVersion"`
+	Status       string    `json:"status"`
+	Ready        bool      `json:"ready"`
+}
