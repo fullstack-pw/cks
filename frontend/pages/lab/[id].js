@@ -72,7 +72,7 @@ export default function LabPage() {
         setSplitSize(newSize);
     }, []);
 
-    if (isLoading) {
+    if (isLoading && !session) {  // Only show loading if we don't have any session data
         return <LoadingState message="Loading lab environment..." size="lg" />;
     }
 

@@ -43,6 +43,7 @@ export const SessionProvider = ({ children }) => {
     };
 
     // Validate a task with proper cancellation and race condition handling
+    // Update the validateTask method to not cause page reloads
     const validateTask = useCallback(async (sessionId, taskId) => {
         const requestKey = `validate-${sessionId}-${taskId}`;
 
@@ -98,6 +99,7 @@ export const SessionProvider = ({ children }) => {
         } finally {
             setLoading(false);
             activeRequests.current.delete(requestKey);
+            // DO NOT call router.reload() or any page refresh here
         }
     }, [toast, cancelActiveRequest]);
 

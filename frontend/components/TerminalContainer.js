@@ -6,10 +6,7 @@ import { Button, LoadingState, ErrorState, StatusIndicator } from './common';
 
 /**
  * Container component for terminals that manages tabs and terminal sessions
- * for control plane and worker nodes.
- * 
- * @param {Object} props
- * @param {string} props.sessionId - The ID of the user session
+ * with persistence across validation operations.
  */
 const TerminalContainer = ({ sessionId }) => {
     // Terminal tabs state
@@ -30,11 +27,15 @@ const TerminalContainer = ({ sessionId }) => {
     // Track component mount status
     const isMounted = useRef(true);
     const cleanupFunctions = useRef([]);
+    const hasInitialized = useRef(false);
 
-    // Create a terminal session
-    const createTerminalSession = useCallback(async (target) => {
-        // Skip if already loading or if the terminal already exists
-        if (terminalSessions[target].isLoading || terminalSessions[target].id) return;
+    // Create or get existing terminal session
+    const createOrGetTerminalSession = useCallback(async (target) => {
+        // Skip if already loading or if the terminal already exists and is connected
+        if (terminalSessions[target].isLoading ||
+            (terminalSessions[target].id && terminalSessions[target].connected)) {
+            return;
+        }
 
         try {
             // Update loading state
@@ -43,51 +44,84 @@ const TerminalContainer = ({ sessionId }) => {
                 [target]: { ...prev[target], isLoading: true, error: null }
             }));
 
-            console.log(`Creating terminal for ${target}...`);
+            console.log(`Creating/getting terminal for ${target}...`);
             const result = await api.terminals.create(sessionId, target);
 
-            setTerminalSessions(prev => ({
-                ...prev,
-                [target]: {
-                    id: result.terminalId,
-                    isLoading: false,
-                    error: null,
-                    connected: false
-                }
-            }));
+            if (isMounted.current) {
+                setTerminalSessions(prev => ({
+                    ...prev,
+                    [target]: {
+                        id: result.terminalId,
+                        isLoading: false,
+                        error: null,
+                        connected: false
+                    }
+                }));
+            }
         } catch (error) {
-            console.error(`Failed to create ${target} terminal:`, error);
+            console.error(`Failed to create/get ${target} terminal:`, error);
 
-            setTerminalSessions(prev => ({
-                ...prev,
-                [target]: {
-                    ...prev[target],
-                    isLoading: false,
-                    error: error.message || `Failed to create terminal for ${target}`
-                }
-            }));
+            if (isMounted.current) {
+                setTerminalSessions(prev => ({
+                    ...prev,
+                    [target]: {
+                        ...prev[target],
+                        isLoading: false,
+                        error: error.message || `Failed to create terminal for ${target}`
+                    }
+                }));
+            }
         }
     }, [sessionId, terminalSessions]);
 
     // Handle terminal connection status change
     const handleConnectionChange = useCallback((target, isConnected) => {
-        setTerminalSessions(prev => ({
-            ...prev,
-            [target]: { ...prev[target], connected: isConnected }
-        }));
+        if (isMounted.current) {
+            setTerminalSessions(prev => ({
+                ...prev,
+                [target]: { ...prev[target], connected: isConnected }
+            }));
+        }
     }, []);
 
     // Handle tab change
     const handleTabChange = useCallback((target) => {
         setActiveTab(target);
 
-        // Create terminal session if it doesn't exist
+        // Create terminal session if it doesn't exist and session is ready
         if (sessionStatus.isReady && !terminalSessions[target].id && !terminalSessions[target].isLoading) {
-            createTerminalSession(target);
+            createOrGetTerminalSession(target);
         }
-    }, [sessionStatus.isReady, terminalSessions, createTerminalSession]);
+    }, [sessionStatus.isReady, terminalSessions, createOrGetTerminalSession]);
 
+    // Initialize terminals from session data
+    const initializeExistingTerminals = useCallback(async (session) => {
+        if (!session.activeTerminals || hasInitialized.current) return;
 
+        console.log('Initializing existing terminals from session:', session.activeTerminals);
+
+        const updates = {};
+        for (const [terminalId, terminalInfo] of Object.entries(session.activeTerminals)) {
+            if (terminalInfo.status === 'active') {
+                updates[terminalInfo.target] = {
+                    id: terminalId,
+                    isLoading: false,
+                    error: null,
+                    connected: false // Will be updated when WebSocket connects
+                };
+            }
+        }
+
+        if (Object.keys(updates).length > 0) {
+            setTerminalSessions(prev => ({
+                ...prev,
+                ...updates
+            }));
+            hasInitialized.current = true;
+        }
+    }, []);
+
+    // Component mount/unmount
     useEffect(() => {
         isMounted.current = true;
 
@@ -99,22 +133,20 @@ const TerminalContainer = ({ sessionId }) => {
         };
     }, []);
 
-    // Poll for session status changes
+    // Poll for session status changes and initialize terminals
     useEffect(() => {
         if (!sessionId) return;
 
-        let timeoutId = null; // Define timeoutId in the effect scope
+        let timeoutId = null;
 
         const checkSessionStatus = async () => {
             if (!isMounted.current) return;
 
             try {
-                // Remove the mount check that prevents state updates
-                setSessionStatus(prev => ({ ...prev, isLoading: true, error: null }));
-
                 const session = await api.sessions.get(sessionId);
 
-                // Allow state updates even after async operations
+                if (!isMounted.current) return;
+
                 if (session.status === 'running') {
                     setSessionStatus({
                         isReady: true,
@@ -123,10 +155,33 @@ const TerminalContainer = ({ sessionId }) => {
                         error: null
                     });
 
-                    // Create control plane terminal automatically
-                    createTerminalSession('control-plane');
-                } else if ((session.status === 'provisioning' || session.status === 'pending') && isMounted.current) {
-                    timeoutId = setTimeout(checkSessionStatus, 15000);
+                    // Initialize existing terminals from session
+                    await initializeExistingTerminals(session);
+
+                    // Create control plane terminal if no existing terminals
+                    if (!hasInitialized.current &&
+                        !terminalSessions['control-plane'].id &&
+                        !terminalSessions['control-plane'].isLoading) {
+                        createOrGetTerminalSession('control-plane');
+                    }
+                } else if (session.status === 'provisioning' || session.status === 'pending') {
+                    setSessionStatus(prev => ({
+                        ...prev,
+                        isLoading: true,
+                        message: `Session ${session.status}...`,
+                        error: null
+                    }));
+
+                    if (isMounted.current) {
+                        timeoutId = setTimeout(checkSessionStatus, 15000);
+                    }
+                } else {
+                    setSessionStatus({
+                        isReady: false,
+                        isLoading: false,
+                        message: `Session ${session.status}`,
+                        error: session.statusMessage || null
+                    });
                 }
             } catch (error) {
                 if (isMounted.current) {
@@ -152,7 +207,7 @@ const TerminalContainer = ({ sessionId }) => {
         cleanupFunctions.current.push(cleanup);
 
         return cleanup;
-    }, [sessionId, createTerminalSession]);
+    }, [sessionId, createOrGetTerminalSession, terminalSessions, initializeExistingTerminals]);
 
     return (
         <div className="h-full flex flex-col">
@@ -228,12 +283,12 @@ const TerminalContainer = ({ sessionId }) => {
                                         <ErrorState
                                             message="Failed to create terminal"
                                             details={terminalSessions['control-plane'].error}
-                                            onRetry={() => createTerminalSession('control-plane')}
+                                            onRetry={() => createOrGetTerminalSession('control-plane')}
                                         />
                                     ) : (
                                         <Button
                                             variant="primary"
-                                            onClick={() => createTerminalSession('control-plane')}
+                                            onClick={() => createOrGetTerminalSession('control-plane')}
                                         >
                                             Connect to Control Plane
                                         </Button>
@@ -257,12 +312,12 @@ const TerminalContainer = ({ sessionId }) => {
                                         <ErrorState
                                             message="Failed to create terminal"
                                             details={terminalSessions['worker-node'].error}
-                                            onRetry={() => createTerminalSession('worker-node')}
+                                            onRetry={() => createOrGetTerminalSession('worker-node')}
                                         />
                                     ) : (
                                         <Button
                                             variant="primary"
-                                            onClick={() => createTerminalSession('worker-node')}
+                                            onClick={() => createOrGetTerminalSession('worker-node')}
                                         >
                                             Connect to Worker Node
                                         </Button>

@@ -76,3 +76,18 @@ func (s *SessionServiceImpl) RegisterTerminalSession(sessionID, terminalID, targ
 func (s *SessionServiceImpl) UnregisterTerminalSession(sessionID, terminalID string) error {
 	return s.sessionManager.UnregisterTerminalSession(sessionID, terminalID)
 }
+
+// GetOrCreateTerminalSession gets existing terminal or creates new one
+func (s *SessionServiceImpl) GetOrCreateTerminalSession(sessionID, target string) (string, bool, error) {
+	return s.sessionManager.GetOrCreateTerminalSession(sessionID, target)
+}
+
+// StoreTerminalSession stores terminal info in session
+func (s *SessionServiceImpl) StoreTerminalSession(sessionID, terminalID, target string) error {
+	return s.sessionManager.StoreTerminalSession(sessionID, terminalID, target)
+}
+
+// MarkTerminalInactive marks a terminal as inactive
+func (s *SessionServiceImpl) MarkTerminalInactive(sessionID, terminalID string) error {
+	return s.sessionManager.MarkTerminalInactive(sessionID, terminalID)
+}

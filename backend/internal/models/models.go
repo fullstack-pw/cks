@@ -8,17 +8,26 @@ import (
 
 // Session represents a user session with VMs and associated resources
 type Session struct {
-	ID               string            `json:"id"`
-	Namespace        string            `json:"namespace"`
-	ScenarioID       string            `json:"scenarioId"`
-	Status           SessionStatus     `json:"status"`
-	StatusMessage    string            `json:"statusMessage,omitempty"`
-	StartTime        time.Time         `json:"startTime"`
-	ExpirationTime   time.Time         `json:"expirationTime"`
-	ControlPlaneVM   string            `json:"controlPlaneVM"`
-	WorkerNodeVM     string            `json:"workerNodeVM"`
-	Tasks            []TaskStatus      `json:"tasks"`
-	TerminalSessions map[string]string `json:"terminalSessions"`
+	ID               string                  `json:"id"`
+	Namespace        string                  `json:"namespace"`
+	ScenarioID       string                  `json:"scenarioId"`
+	Status           SessionStatus           `json:"status"`
+	StatusMessage    string                  `json:"statusMessage,omitempty"`
+	StartTime        time.Time               `json:"startTime"`
+	ExpirationTime   time.Time               `json:"expirationTime"`
+	ControlPlaneVM   string                  `json:"controlPlaneVM"`
+	WorkerNodeVM     string                  `json:"workerNodeVM"`
+	Tasks            []TaskStatus            `json:"tasks"`
+	TerminalSessions map[string]string       `json:"terminalSessions"` // Keep existing
+	ActiveTerminals  map[string]TerminalInfo `json:"activeTerminals"`  // NEW: Persistent terminal info
+}
+
+type TerminalInfo struct {
+	ID         string    `json:"id"`
+	Target     string    `json:"target"` // "control-plane" or "worker-node"
+	Status     string    `json:"status"` // "active", "disconnected"
+	CreatedAt  time.Time `json:"createdAt"`
+	LastUsedAt time.Time `json:"lastUsedAt"`
 }
 
 // SessionStatus represents the status of a session

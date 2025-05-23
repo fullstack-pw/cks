@@ -932,3 +932,98 @@ func (sm *SessionManager) UpdateSessionStatus(sessionID string, status models.Se
 
 	return nil
 }
+
+func (sm *SessionManager) GetOrCreateTerminalSession(sessionID, target string) (string, bool, error) {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	session, ok := sm.sessions[sessionID]
+	if !ok {
+		return "", false, fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Initialize ActiveTerminals if nil
+	if session.ActiveTerminals == nil {
+		session.ActiveTerminals = make(map[string]models.TerminalInfo) // Use models.TerminalInfo
+	}
+
+	// Look for existing active terminal for this target
+	for terminalID, terminalInfo := range session.ActiveTerminals {
+		if terminalInfo.Target == target && terminalInfo.Status == "active" {
+			// Update last used time
+			terminalInfo.LastUsedAt = time.Now()
+			session.ActiveTerminals[terminalID] = terminalInfo
+
+			sm.logger.WithFields(logrus.Fields{
+				"sessionID":  sessionID,
+				"terminalID": terminalID,
+				"target":     target,
+			}).Info("Reusing existing terminal session")
+
+			return terminalID, true, nil // true = existing terminal
+		}
+	}
+
+	// No existing terminal found, will need to create new one
+	return "", false, nil // false = needs new terminal
+}
+
+// StoreTerminalSession stores terminal info in session
+func (sm *SessionManager) StoreTerminalSession(sessionID, terminalID, target string) error {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	session, ok := sm.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	// Initialize ActiveTerminals if nil
+	if session.ActiveTerminals == nil {
+		session.ActiveTerminals = make(map[string]models.TerminalInfo) // Use models.TerminalInfo
+	}
+
+	// Store terminal info
+	session.ActiveTerminals[terminalID] = models.TerminalInfo{ // Use models.TerminalInfo
+		ID:         terminalID,
+		Target:     target,
+		Status:     "active",
+		CreatedAt:  time.Now(),
+		LastUsedAt: time.Now(),
+	}
+
+	// Also maintain existing TerminalSessions map for backward compatibility
+	if session.TerminalSessions == nil {
+		session.TerminalSessions = make(map[string]string)
+	}
+	session.TerminalSessions[terminalID] = target
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID":  sessionID,
+		"terminalID": terminalID,
+		"target":     target,
+	}).Info("Stored terminal session info")
+
+	return nil
+}
+
+// MarkTerminalInactive marks a terminal as inactive
+func (sm *SessionManager) MarkTerminalInactive(sessionID, terminalID string) error {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	session, ok := sm.sessions[sessionID]
+	if !ok {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	if session.ActiveTerminals != nil {
+		if terminalInfo, exists := session.ActiveTerminals[terminalID]; exists {
+			terminalInfo.Status = "disconnected"
+			terminalInfo.LastUsedAt = time.Now()
+			session.ActiveTerminals[terminalID] = terminalInfo
+		}
+	}
+
+	return nil
+}

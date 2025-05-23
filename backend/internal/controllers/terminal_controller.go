@@ -46,7 +46,7 @@ func (tc *TerminalController) RegisterRoutes(router *gin.Engine) {
 	}
 }
 
-// CreateTerminal creates a new terminal session
+// CreateTerminal creates a new terminal session or reuses existing one
 func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 	sessionID := c.Param("id")
 
@@ -90,7 +90,26 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// Create terminal session
+	// NEW: Check for existing terminal first
+	if existingTerminalID, isExisting, err := tc.sessionService.GetOrCreateTerminalSession(sessionID, request.Target); err != nil {
+		tc.logger.WithError(err).Error("Failed to check existing terminals")
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to check terminals: %v", err)})
+		return
+	} else if isExisting {
+		// Return existing terminal
+		tc.logger.WithFields(logrus.Fields{
+			"sessionID":  sessionID,
+			"terminalID": existingTerminalID,
+			"target":     request.Target,
+		}).Info("Returning existing terminal session")
+
+		c.JSON(http.StatusOK, models.CreateTerminalResponse{
+			TerminalID: existingTerminalID,
+		})
+		return
+	}
+
+	// Create new terminal session (existing logic)
 	terminalID, err := tc.terminalService.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to create terminal session")
@@ -98,7 +117,14 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// Register terminal with session service
+	// NEW: Store terminal info in session
+	err = tc.sessionService.StoreTerminalSession(sessionID, terminalID, request.Target)
+	if err != nil {
+		tc.logger.WithError(err).Error("Failed to store terminal session info")
+		// Continue anyway, don't fail the request
+	}
+
+	// Keep existing registration for backward compatibility
 	err = tc.sessionService.RegisterTerminalSession(sessionID, terminalID, request.Target)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to register terminal session")

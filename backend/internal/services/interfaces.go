@@ -23,6 +23,9 @@ type SessionService interface {
 	UpdateSessionStatus(sessionID string, status models.SessionStatus, message string) error
 	RegisterTerminalSession(sessionID, terminalID, target string) error
 	UnregisterTerminalSession(sessionID, terminalID string) error
+	GetOrCreateTerminalSession(sessionID, target string) (string, bool, error)
+	StoreTerminalSession(sessionID, terminalID, target string) error
+	MarkTerminalInactive(sessionID, terminalID string) error
 }
 
 // TerminalService defines the interface for terminal-related operations
