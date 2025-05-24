@@ -2,14 +2,17 @@
 
 ## Executive Summary
 
-**Problem**: VM provisioning takes 10-15 minutes due to full Kubernetes bootstrap process
-**Solution**: KubeVirt snapshots of pre-built clusters with intelligent fallback
-**Impact**: 80-85% reduction in provisioning time (2-3 minutes vs 10-15 minutes)
+**Problem**: VM provisioning takes 8 minutes due to full Kubernetes bootstrap process
+**Solution**: KubeVirt snapshots of pre-built clusters with intelligent fallback. We should create snapshots providing sessionId then snapshots will be created from running VMs with the sessionId like cks-control-plane-user-session-76c3ac1b and cks-worker-node-user-session-76c3ac1b.
+**Impact**: Aggressive reduction in provisioning time (2-3 minutes vs 8 minutes)
+**Related documentation**:
+1. https://kubevirt.io/user-guide/storage/clone_api/#using-clones-as-a-golden-vm-image
+2. https://kubevirt.io/user-guide/storage/snapshot_restore_api/#snapshot-a-virtualmachine
 
 ### Strategy Overview
 1. **Snapshot-First**: Use KubeVirt VirtualMachineSnapshots of ready 2-node clusters
 2. **Smart Fallback**: Auto-detect snapshot availability, fallback to optimized bootstrap
-3. **Parallel Processing**: Create both VMs simultaneously when bootstrapping
+3. **Parallel Processing (CANCELLED)**: Create both VMs simultaneously when bootstrapping
 4. **Zero Downtime**: Additive changes that don't break existing functionality
 
 ### Implementation Phases
@@ -43,7 +46,7 @@ Transform VM provisioning from 10-15 minutes to 2-3 minutes using KubeVirt Virtu
 
 ---
 
-## Phase 1: Snapshot Detection & Fallback Framework
+## Phase 1: Snapshot Detection & Fallback Framework (DONE)
 **Goal**: Implement smart provisioning strategy selection without breaking existing functionality
 **Duration**: 1-2 days
 **Risk**: Low (additive changes)
@@ -134,145 +137,7 @@ func (sm *SessionManager) provisionFromSnapshot(ctx context.Context, session *mo
 
 ---
 
-## Phase 2: Bootstrap Optimization & Parallel VM Creation
-**Goal**: Optimize existing bootstrap while maintaining compatibility
-**Duration**: 2-3 days
-**Risk**: Medium (modifies existing flow)
-
-### Step 2.1: Optimize Resource Quota Setup
-**File**: `backend/internal/sessions/session_manager.go`
-```go
-func (sm *SessionManager) setupResourceQuotasOptimized(ctx context.Context, namespace string) error {
-    // Reduce retry attempts
-    backoff := wait.Backoff{
-        Steps:    3,        // Reduced from 5
-        Duration: 500 * time.Millisecond, // Faster initial retry
-        Factor:   1.5,      // Reduced from 2.0
-        Jitter:   0.05,     // Reduced jitter
-    }
-    
-    // Pre-check namespace existence before creating quota
-    // Implement fast-fail for common errors
-}
-```
-
-### Step 2.2: Implement Parallel VM Creation
-**File**: `backend/internal/kubevirt/client.go`
-```go
-func (c *Client) CreateClusterParallel(ctx context.Context, namespace, controlPlaneName, workerNodeName string) error {
-    // Create both cloud-init secrets in parallel
-    errChan := make(chan error, 2)
-    
-    go func() {
-        err := c.createCloudInitSecret(ctx, namespace, controlPlaneName, "control-plane")
-        errChan <- err
-    }()
-    
-    go func() {
-        // Create worker secret without join command dependency
-        err := c.createCloudInitSecretWorkerAsync(ctx, namespace, workerNodeName)
-        errChan <- err
-    }()
-    
-    // Wait for both secrets
-    for i := 0; i < 2; i++ {
-        if err := <-errChan; err != nil {
-            return err
-        }
-    }
-    
-    // Create both VMs in parallel
-    go func() {
-        err := c.createVM(ctx, namespace, controlPlaneName, "control-plane")
-        errChan <- err
-    }()
-    
-    go func() {
-        err := c.createVM(ctx, namespace, workerNodeName, "worker")
-        errChan <- err
-    }()
-    
-    // Wait for both VMs
-    for i := 0; i < 2; i++ {
-        if err := <-errChan; err != nil {
-            return err
-        }
-    }
-    
-    return c.WaitForVMsReadyParallel(ctx, namespace, controlPlaneName, workerNodeName)
-}
-```
-
-### Step 2.3: Extract Join Command to Session Management
-**File**: `backend/internal/sessions/session_manager.go`
-```go
-type SessionManager struct {
-    // Add join command management
-    joinCommands map[string]string // sessionID -> joinCommand
-    joinMutex    sync.RWMutex
-}
-
-func (sm *SessionManager) getOrCreateJoinCommand(ctx context.Context, session *models.Session) (string, error) {
-    sm.joinMutex.RLock()
-    if cmd, exists := sm.joinCommands[session.ID]; exists {
-        sm.joinMutex.RUnlock()
-        return cmd, nil
-    }
-    sm.joinMutex.RUnlock()
-    
-    // Generate join command asynchronously
-    cmd, err := sm.generateJoinCommand(ctx, session)
-    if err != nil {
-        return "", err
-    }
-    
-    sm.joinMutex.Lock()
-    sm.joinCommands[session.ID] = cmd
-    sm.joinMutex.Unlock()
-    
-    return cmd, nil
-}
-```
-
-### Step 2.4: Optimize VM Ready Detection
-**File**: `backend/internal/kubevirt/client.go`
-```go
-func (c *Client) WaitForVMsReadyParallel(ctx context.Context, namespace string, vmNames ...string) error {
-    errChan := make(chan error, len(vmNames))
-    
-    for _, vmName := range vmNames {
-        go func(name string) {
-            err := c.WaitForVMReadyOptimized(ctx, namespace, name)
-            errChan <- err
-        }(vmName)
-    }
-    
-    for i := 0; i < len(vmNames); i++ {
-        if err := <-errChan; err != nil {
-            return err
-        }
-    }
-    
-    return nil
-}
-
-func (c *Client) WaitForVMReadyOptimized(ctx context.Context, namespace, vmName string) error {
-    return wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(context.Context) (bool, error) {
-        // Optimized ready check with faster polling
-        // Check VMI phase first (faster than VM status)
-        vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
-        if err != nil {
-            return false, nil
-        }
-        
-        return vmi.Status.Phase == "Running", nil
-    })
-}
-```
-
-**Expected Improvement**: 30-40% faster bootstrap (8-10 minutes instead of 12-15)
-
----
+## Phase 2: Bootstrap Optimization & Parallel VM Creation (CANCELLED)
 
 ## Phase 3: Snapshot Creation Infrastructure
 **Goal**: Implement base cluster creation and snapshot management
@@ -283,16 +148,16 @@ func (c *Client) WaitForVMReadyOptimized(ctx context.Context, namespace, vmName 
 **File**: `backend/internal/kubevirt/client.go`
 ```go
 import (
-    snapshotv1alpha1 "kubevirt.io/api/snapshot/v1alpha1"
+    snapshotv1beta1 "kubevirt.io/api/snapshot/v1beta1"
 )
 
 func (c *Client) CreateVMSnapshot(ctx context.Context, namespace, vmName, snapshotName string) error {
-    snapshot := &snapshotv1alpha1.VirtualMachineSnapshot{
+    snapshot := &snapshotv1beta1.VirtualMachineSnapshot{
         ObjectMeta: metav1.ObjectMeta{
             Name:      snapshotName,
             Namespace: namespace,
         },
-        Spec: snapshotv1alpha1.VirtualMachineSnapshotSpec{
+        Spec: snapshotv1beta1.VirtualMachineSnapshotSpec{
             Source: corev1.TypedLocalObjectReference{
                 APIVersion: "kubevirt.io/v1",
                 Kind:       "VirtualMachine",
@@ -356,34 +221,6 @@ func (sm *SessionManager) CreateBaseClusterSnapshot(ctx context.Context) error {
     
     // Create snapshots
     return sm.createSnapshots(ctx, baseSession)
-}
-
-func (sm *SessionManager) cleanBaseClusterState(ctx context.Context, session *models.Session) error {
-    commands := []string{
-        // Clear logs
-        "sudo journalctl --vacuum-time=1s",
-        "sudo rm -rf /var/log/*.log",
-        "sudo rm -rf /tmp/*",
-        
-        // Clear bash history
-        "history -c",
-        "rm -f ~/.bash_history",
-        
-        // Clear kubectl cache
-        "rm -rf ~/.kube/cache",
-        
-        // Remove any test pods/resources
-        "kubectl delete pods --all --all-namespaces --ignore-not-found",
-        "kubectl delete pvc --all --all-namespaces --ignore-not-found",
-    }
-    
-    for _, cmd := range commands {
-        // Execute on both VMs
-        sm.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, session.ControlPlaneVM, cmd)
-        sm.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, session.WorkerNodeVM, cmd)
-    }
-    
-    return nil
 }
 ```
 
@@ -487,12 +324,12 @@ func (ac *AdminController) CreateBaseSnapshot(c *gin.Context) {
 **File**: `backend/internal/kubevirt/client.go`
 ```go
 func (c *Client) CreateVMFromSnapshot(ctx context.Context, namespace, vmName, snapshotNamespace, snapshotName string) error {
-    restore := &snapshotv1alpha1.VirtualMachineRestore{
+    restore := &snapshotv1beta1.VirtualMachineRestore{
         ObjectMeta: metav1.ObjectMeta{
             Name:      fmt.Sprintf("%s-restore", vmName),
             Namespace: namespace,
         },
-        Spec: snapshotv1alpha1.VirtualMachineRestoreSpec{
+        Spec: snapshotv1beta1.VirtualMachineRestoreSpec{
             Target: corev1.TypedLocalObjectReference{
                 APIVersion: "kubevirt.io/v1",
                 Kind:       "VirtualMachine",
