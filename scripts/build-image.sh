@@ -12,6 +12,7 @@ MOUNT_DIR="${TEMP_DIR}/mnt"
 HTTP_SERVER_PORT=8000
 PVC_NAME="golden-image-${K8S_VERSION//./-}"
 NAMESPACE="vm-templates"
+STORAGECLASS="longhorn"
 
 echo "Creating golden VM image for Kubernetes ${K8S_VERSION}..."
 
@@ -115,7 +116,7 @@ spec:
     resources:
       requests:
         storage: 20Gi
-    storageClassName: local-path
+    storageClassName: ${STORAGECLASS}
   source:
     http:
       url: "http://${LOCAL_IP}:${HTTP_SERVER_PORT}/$(basename ${OUTPUT_IMAGE})"

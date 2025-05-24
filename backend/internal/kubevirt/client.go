@@ -15,6 +15,7 @@ import (
 	"text/template"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -25,6 +26,7 @@ import (
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
 	"github.com/sirupsen/logrus"
+	snapshotv1beta1 "kubevirt.io/api/snapshot/v1beta1"
 )
 
 // Client represents a KubeVirt client for managing VMs
@@ -830,4 +832,212 @@ func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (str
 	}
 
 	return "Pending", nil
+}
+
+// CreateVMSnapshot creates a snapshot of a virtual machine
+func (c *Client) CreateVMSnapshot(ctx context.Context, namespace, vmName, snapshotName string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace":    namespace,
+		"vmName":       vmName,
+		"snapshotName": snapshotName,
+	}).Info("Creating VM snapshot")
+
+	snapshot := &snapshotv1beta1.VirtualMachineSnapshot{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      snapshotName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"cks.io/snapshot": "base-cluster",
+				"cks.io/vm-role": func() string {
+					if strings.Contains(vmName, "control-plane") {
+						return "control-plane"
+					}
+					return "worker"
+				}(),
+			},
+		},
+		Spec: snapshotv1beta1.VirtualMachineSnapshotSpec{
+			Source: corev1.TypedLocalObjectReference{
+				APIGroup: &[]string{"kubevirt.io"}[0], // Add the API group
+				Kind:     "VirtualMachine",
+				Name:     vmName,
+			},
+		},
+	}
+
+	_, err := c.virtClient.VirtualMachineSnapshot(namespace).Create(ctx, snapshot, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create snapshot %s: %w", snapshotName, err)
+	}
+
+	logrus.WithField("snapshotName", snapshotName).Info("VM snapshot creation initiated")
+	return nil
+}
+
+// WaitForSnapshotReady waits for a snapshot to be ready to use
+func (c *Client) WaitForSnapshotReady(ctx context.Context, namespace, snapshotName string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace":    namespace,
+		"snapshotName": snapshotName,
+	}).Info("Waiting for snapshot to be ready")
+
+	startTime := time.Now()
+	return wait.PollUntilContextCancel(ctx, 10*time.Second, true, func(context.Context) (bool, error) {
+		snapshot, err := c.virtClient.VirtualMachineSnapshot(namespace).Get(ctx, snapshotName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				logrus.WithField("snapshotName", snapshotName).Debug("Snapshot not found yet")
+				return false, nil
+			}
+			logrus.WithError(err).WithField("snapshotName", snapshotName).Warn("Error checking snapshot status")
+			return false, nil
+		}
+
+		elapsed := time.Since(startTime)
+		logrus.WithFields(logrus.Fields{
+			"snapshotName": snapshotName,
+			"elapsed":      elapsed,
+			"phase": func() string {
+				if snapshot.Status != nil {
+					return string(snapshot.Status.Phase)
+				}
+				return "Unknown"
+			}(),
+			"readyToUse": func() bool {
+				if snapshot.Status != nil && snapshot.Status.ReadyToUse != nil {
+					return *snapshot.Status.ReadyToUse
+				}
+				return false
+			}(),
+		}).Debug("Snapshot status check")
+
+		if snapshot.Status != nil && snapshot.Status.ReadyToUse != nil && *snapshot.Status.ReadyToUse {
+			logrus.WithFields(logrus.Fields{
+				"snapshotName": snapshotName,
+				"elapsed":      elapsed,
+			}).Info("Snapshot is ready")
+			return true, nil
+		}
+
+		// Check for failed state
+		if snapshot.Status != nil && snapshot.Status.Phase == snapshotv1beta1.Failed {
+			return false, fmt.Errorf("snapshot %s failed to create", snapshotName)
+		}
+
+		return false, nil
+	})
+}
+
+// CheckSnapshotExists checks if a snapshot exists and is ready
+func (c *Client) CheckSnapshotExists(ctx context.Context, namespace, snapshotName string) bool {
+	snapshot, err := c.virtClient.VirtualMachineSnapshot(namespace).Get(ctx, snapshotName, metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+
+	return snapshot.Status != nil && snapshot.Status.ReadyToUse != nil && *snapshot.Status.ReadyToUse
+}
+
+// DeleteVMSnapshot deletes a VM snapshot
+func (c *Client) DeleteVMSnapshot(ctx context.Context, namespace, snapshotName string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace":    namespace,
+		"snapshotName": snapshotName,
+	}).Info("Deleting VM snapshot")
+
+	err := c.virtClient.VirtualMachineSnapshot(namespace).Delete(ctx, snapshotName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete snapshot %s: %w", snapshotName, err)
+	}
+
+	logrus.WithField("snapshotName", snapshotName).Info("VM snapshot deleted")
+	return nil
+}
+
+// StartVM starts a virtual machine
+func (c *Client) StartVM(ctx context.Context, namespace, vmName string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmName":    vmName,
+	}).Info("Starting VM")
+
+	vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, vmName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get VM %s: %w", vmName, err)
+	}
+
+	// Set running to true
+	vm.Spec.Running = &[]bool{true}[0]
+	_, err = c.virtClient.VirtualMachine(namespace).Update(ctx, vm, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to start VM %s: %w", vmName, err)
+	}
+
+	logrus.WithField("vmName", vmName).Info("VM start initiated")
+	return nil
+}
+
+// VirtClient returns the KubeVirt client for direct API access
+func (c *Client) VirtClient() kubecli.KubevirtClient {
+	return c.virtClient
+}
+
+// StopVMs stops multiple VMs for consistent snapshot creation
+func (c *Client) StopVMs(ctx context.Context, namespace string, vmNames ...string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmNames":   vmNames,
+	}).Info("Freezing VMs for snapshot")
+
+	errChan := make(chan error, len(vmNames))
+
+	// Stop all VMs in parallel
+	for _, vmName := range vmNames {
+		go func(name string) {
+			vm, err := c.virtClient.VirtualMachine(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				errChan <- fmt.Errorf("failed to get VM %s: %w", name, err)
+				return
+			}
+
+			// Set running to false
+			vm.Spec.Running = &[]bool{false}[0]
+			_, err = c.virtClient.VirtualMachine(namespace).Update(ctx, vm, metav1.UpdateOptions{})
+			if err != nil {
+				errChan <- fmt.Errorf("failed to stop VM %s: %w", name, err)
+				return
+			}
+
+			// Wait for VM to stop
+			err = c.waitForVMStopped(ctx, namespace, name)
+			errChan <- err
+		}(vmName)
+	}
+
+	// Wait for all VMs to stop
+	for range vmNames {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+
+	logrus.WithField("vmNames", vmNames).Info("All VMs stopped successfully")
+	return nil
+}
+
+// waitForVMStopped waits for a VM to be completely stopped
+func (c *Client) waitForVMStopped(ctx context.Context, namespace, vmName string) error {
+	return wait.PollUntilContextCancel(ctx, 5*time.Second, true, func(context.Context) (bool, error) {
+		// Check if VMI still exists
+		_, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				// VMI doesn't exist anymore, VM is stopped
+				return true, nil
+			}
+			return false, nil
+		}
+		// VMI still exists, VM is not fully stopped
+		return false, nil
+	})
 }

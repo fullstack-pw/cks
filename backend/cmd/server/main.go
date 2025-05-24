@@ -134,6 +134,9 @@ func main() {
 	scenarioController := controllers.NewScenarioController(scenarioService)
 	scenarioController.RegisterRoutes(router)
 
+	adminController := controllers.NewAdminController(sessionManager, logger)
+	adminController.RegisterRoutes(router)
+
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort),
