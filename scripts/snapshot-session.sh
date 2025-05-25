@@ -208,73 +208,52 @@ EOF
     fi
 }
 
-# Restore VM from snapshot - Fixed cross-namespace approach
-restore_vm_to_templates() {
+# Create VM from snapshot using Clone API - the correct KubeVirt way
+create_vm_from_snapshot() {
     local snapshot_name="$1"
     local source_namespace="$2"
     local target_namespace="$3"
     local new_vm_name="$4"
     
-    log_info "Restoring VM ${new_vm_name} from snapshot ${snapshot_name} to ${target_namespace}..."
+    log_info "Creating VM ${new_vm_name} from snapshot ${snapshot_name} using Clone API..."
     
-    # Create VirtualMachineRestore in the SOURCE namespace (where snapshot exists)
-    # but target VM will be created in the TARGET namespace
+    # Create a Clone object that references the snapshot
     cat << EOF | kubectl apply -f -
-apiVersion: snapshot.kubevirt.io/v1beta1
-kind: VirtualMachineRestore
+apiVersion: clone.kubevirt.io/v1alpha1
+kind: VirtualMachineClone
 metadata:
-  name: restore-${new_vm_name}
-  namespace: ${source_namespace}
+  name: clone-${new_vm_name}
 spec:
+  source:
+    apiGroup: snapshot.kubevirt.io
+    kind: VirtualMachineSnapshot
+    name: ${snapshot_name}
   target:
     apiGroup: kubevirt.io
     kind: VirtualMachine
     name: ${new_vm_name}
-  virtualMachineSnapshotName: ${snapshot_name}
 EOF
     
     if [[ $? -eq 0 ]]; then
-        log_success "VirtualMachineRestore created for ${new_vm_name} in ${source_namespace}"
+        log_success "VirtualMachineClone created for ${new_vm_name}"
         
-        # Wait for restore to complete
-        log_info "Waiting for restore to complete..."
-        if kubectl wait vmrestore restore-${new_vm_name} -n ${source_namespace} --for condition=Ready --timeout=600s; then
-            log_success "VM restore completed"
+        # Wait for clone to complete
+        log_info "Waiting for clone to complete..."
+        if kubectl wait vmclone clone-${new_vm_name} -n ${target_namespace} --for condition=Ready --timeout=600s; then
+            log_success "VM ${new_vm_name} cloned successfully to ${target_namespace}"
             
-            # Check if VM was created in source namespace (it will be)
-            if kubectl get vm ${new_vm_name} -n ${source_namespace} &> /dev/null; then
-                log_info "VM ${new_vm_name} created in ${source_namespace}, now moving to ${target_namespace}..."
-                
-                # Export VM YAML and recreate in target namespace
-                kubectl get vm ${new_vm_name} -n ${source_namespace} -o yaml | \
-                sed "s/namespace: ${source_namespace}/namespace: ${target_namespace}/" | \
-                sed '/resourceVersion:/d' | \
-                sed '/uid:/d' | \
-                sed '/creationTimestamp:/d' | \
-                sed '/generation:/d' | \
-                kubectl apply -f -
-                
-                if [[ $? -eq 0 ]]; then
-                    log_success "VM ${new_vm_name} successfully moved to ${target_namespace}"
-                    
-                    # Cleanup the VM from source namespace
-                    kubectl delete vm ${new_vm_name} -n ${source_namespace}
-                    log_info "Cleaned up VM from source namespace"
-                else
-                    log_error "Failed to move VM to target namespace"
-                    return 1
-                fi
-            else
-                log_error "VM ${new_vm_name} not found after restore"
-                return 1
-            fi
+            # Cleanup the clone object
+            kubectl delete vmclone clone-${new_vm_name} -n ${target_namespace}
+            log_info "Clone object cleaned up"
+            
+            return 0
         else
-            log_error "VM restore failed for ${new_vm_name}"
-            check_restore_status "restore-${new_vm_name}" "${source_namespace}"
+            log_error "VM clone failed for ${new_vm_name}"
+            kubectl describe vmclone clone-${new_vm_name} -n ${target_namespace}
             return 1
         fi
     else
-        log_error "Failed to create VirtualMachineRestore for ${new_vm_name}"
+        log_error "Failed to create VirtualMachineClone for ${new_vm_name}"
         return 1
     fi
 }
@@ -334,12 +313,13 @@ ensure_vm_templates_namespace() {
     fi
 }
 
-# Cleanup function for error cases
+# Enhanced cleanup function for error cases
 cleanup_on_error() {
     local session_id="$1"
     local namespace="user-session-${session_id}"
     local control_plane_vm="cks-control-plane-user-session-${session_id}"
     local worker_vm="cks-worker-node-user-session-${session_id}"
+    local vm_templates_ns="vm-templates"
     
     log_warn "Cleaning up after error..."
     
@@ -347,15 +327,23 @@ cleanup_on_error() {
     start_vm "$control_plane_vm" "$namespace" || true
     start_vm "$worker_vm" "$namespace" || true
     
-    # Optionally cleanup partial snapshots
-    kubectl delete vmsnapshot cks-control-plane-base-snapshot -n vm-templates 2>/dev/null || true
-    kubectl delete vmsnapshot cks-worker-base-snapshot -n vm-templates 2>/dev/null || true
+    # Cleanup partial snapshots
+    kubectl delete vmsnapshot cks-control-plane-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmsnapshot cks-worker-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" 2>/dev/null || true
     kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" 2>/dev/null || true
+    
+    # Cleanup clone objects
+    kubectl delete vmclone clone-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmclone clone-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
+    
+    # Cleanup template VMs
+    kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vm cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
 }
 
-# Main function - simplified version that works
-# Updated main function
+
+# Updated main function using Clone API approach
 main() {
     local session_id="$1"
     local namespace="user-session-${session_id}"
@@ -380,8 +368,8 @@ main() {
     kubectl delete vmsnapshot cks-worker-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vm cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmrestore restore-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmrestore restore-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmclone clone-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmclone clone-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" 2>/dev/null || true
     kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" 2>/dev/null || true
     
@@ -400,10 +388,10 @@ main() {
     log_info "Initial snapshots created successfully!"
     echo
     
-    # Restore VMs to vm-templates namespace
-    log_info "Restoring VMs to vm-templates namespace..."
-    restore_vm_to_templates "temp-control-plane-snapshot" "$namespace" "$vm_templates_ns" "cks-control-plane-base"
-    restore_vm_to_templates "temp-worker-snapshot" "$namespace" "$vm_templates_ns" "cks-worker-base"
+    # Create VMs in vm-templates namespace using Clone API
+    log_info "Creating template VMs from snapshots using Clone API..."
+    create_vm_from_snapshot "temp-control-plane-snapshot" "$namespace" "$vm_templates_ns" "cks-control-plane-base"
+    create_vm_from_snapshot "temp-worker-snapshot" "$namespace" "$vm_templates_ns" "cks-worker-base"
     
     # Create final snapshots with standard names
     log_info "Creating final snapshots with standard names..."
@@ -415,14 +403,17 @@ main() {
     kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" || true
     kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" || true
     
+    # Cleanup template VMs after snapshots are created
+    log_info "Cleaning up template VMs..."
+    kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" || true
+    kubectl delete vm cks-worker-base -n "$vm_templates_ns" || true
+    
     # Show final status
     log_success "All snapshots created successfully!"
     echo
     log_info "Final snapshots in vm-templates namespace:"
     kubectl get vmsnapshot -n "$vm_templates_ns" -o custom-columns="NAME:.metadata.name,READY:.status.readyToUse,PHASE:.status.phase,AGE:.metadata.creationTimestamp"
     echo
-    log_info "Template VMs in vm-templates namespace:"
-    kubectl get vm -n "$vm_templates_ns" -o custom-columns="NAME:.metadata.name,RUNNING:.spec.running,READY:.status.ready,AGE:.metadata.creationTimestamp"
     
     echo
     log_success "Session ${session_id} snapshots are ready for fast provisioning!"
