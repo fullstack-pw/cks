@@ -164,16 +164,15 @@ start_vm() {
     log_success "VM ${vm_name} started successfully"
 }
 
-# Create VM snapshot
+# Create VM snapshot with wait
 create_snapshot() {
     local vm_name="$1"
     local namespace="$2"
     local snapshot_name="$3"
-    local target_namespace="$4"
     
     log_info "Creating snapshot ${snapshot_name} from VM ${vm_name}..."
     
-    # Create the snapshot YAML with correct cross-namespace reference
+    # Create the snapshot YAML
     cat << EOF | kubectl apply -f -
 apiVersion: snapshot.kubevirt.io/v1beta1
 kind: VirtualMachineSnapshot
@@ -192,73 +191,135 @@ EOF
     
     if [[ $? -eq 0 ]]; then
         log_success "Snapshot ${snapshot_name} creation initiated in namespace ${namespace}"
+        
+        # Wait for snapshot to be ready
+        log_info "Waiting for snapshot ${snapshot_name} to be ready..."
+        kubectl wait vmsnapshot ${snapshot_name} -n ${namespace} --for condition=Ready --timeout=600s
+        
+        if [[ $? -eq 0 ]]; then
+            log_success "Snapshot ${snapshot_name} is ready"
+        else
+            log_error "Snapshot ${snapshot_name} failed to become ready"
+            return 1
+        fi
     else
         log_error "Failed to create snapshot ${snapshot_name}"
         return 1
     fi
 }
 
-copy_snapshot_to_templates() {
+# Restore VM from snapshot - Fixed cross-namespace approach
+restore_vm_to_templates() {
     local snapshot_name="$1"
     local source_namespace="$2"
     local target_namespace="$3"
+    local new_vm_name="$4"
     
-    log_info "Copying snapshot ${snapshot_name} to ${target_namespace} namespace..."
+    log_info "Restoring VM ${new_vm_name} from snapshot ${snapshot_name} to ${target_namespace}..."
     
-    # Wait for source snapshot to be ready first
-    wait_for_snapshot "$snapshot_name" "$source_namespace" 600
-    
-    # Get the snapshot content and recreate in target namespace
-    local snapshot_content=$(kubectl get vmsnapshot "$snapshot_name" -n "$source_namespace" -o yaml)
-    
-    # Modify the YAML for target namespace
-    echo "$snapshot_content" | \
-    sed "s/namespace: ${source_namespace}/namespace: ${target_namespace}/" | \
-    sed '/resourceVersion:/d' | \
-    sed '/uid:/d' | \
-    sed '/creationTimestamp:/d' | \
-    sed '/generation:/d' | \
-    kubectl apply -f -
+    # Create VirtualMachineRestore in the SOURCE namespace (where snapshot exists)
+    # but target VM will be created in the TARGET namespace
+    cat << EOF | kubectl apply -f -
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineRestore
+metadata:
+  name: restore-${new_vm_name}
+  namespace: ${source_namespace}
+spec:
+  target:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: ${new_vm_name}
+  virtualMachineSnapshotName: ${snapshot_name}
+EOF
     
     if [[ $? -eq 0 ]]; then
-        log_success "Snapshot ${snapshot_name} copied to ${target_namespace}"
+        log_success "VirtualMachineRestore created for ${new_vm_name} in ${source_namespace}"
+        
+        # Wait for restore to complete
+        log_info "Waiting for restore to complete..."
+        if kubectl wait vmrestore restore-${new_vm_name} -n ${source_namespace} --for condition=Ready --timeout=600s; then
+            log_success "VM restore completed"
+            
+            # Check if VM was created in source namespace (it will be)
+            if kubectl get vm ${new_vm_name} -n ${source_namespace} &> /dev/null; then
+                log_info "VM ${new_vm_name} created in ${source_namespace}, now moving to ${target_namespace}..."
+                
+                # Export VM YAML and recreate in target namespace
+                kubectl get vm ${new_vm_name} -n ${source_namespace} -o yaml | \
+                sed "s/namespace: ${source_namespace}/namespace: ${target_namespace}/" | \
+                sed '/resourceVersion:/d' | \
+                sed '/uid:/d' | \
+                sed '/creationTimestamp:/d' | \
+                sed '/generation:/d' | \
+                kubectl apply -f -
+                
+                if [[ $? -eq 0 ]]; then
+                    log_success "VM ${new_vm_name} successfully moved to ${target_namespace}"
+                    
+                    # Cleanup the VM from source namespace
+                    kubectl delete vm ${new_vm_name} -n ${source_namespace}
+                    log_info "Cleaned up VM from source namespace"
+                else
+                    log_error "Failed to move VM to target namespace"
+                    return 1
+                fi
+            else
+                log_error "VM ${new_vm_name} not found after restore"
+                return 1
+            fi
+        else
+            log_error "VM restore failed for ${new_vm_name}"
+            check_restore_status "restore-${new_vm_name}" "${source_namespace}"
+            return 1
+        fi
     else
-        log_error "Failed to copy snapshot ${snapshot_name} to ${target_namespace}"
+        log_error "Failed to create VirtualMachineRestore for ${new_vm_name}"
         return 1
     fi
 }
 
-# Wait for snapshot to be ready
-wait_for_snapshot() {
-    local snapshot_name="$1"
+# Create final snapshot in vm-templates namespace
+create_final_snapshot() {
+    local vm_name="$1"
     local namespace="$2"
-    local timeout="${3:-600}" # 10 minutes default
+    local snapshot_name="$3"
     
-    log_info "Waiting for snapshot ${snapshot_name} to be ready (timeout: ${timeout}s)..."
+    log_info "Creating final snapshot ${snapshot_name} from VM ${vm_name} in ${namespace}..."
     
-    local count=0
-    while [[ $count -lt $timeout ]]; do
-        local ready=$(kubectl get vmsnapshot "$snapshot_name" -n "$namespace" -o jsonpath='{.status.readyToUse}' 2>/dev/null || echo "false")
+    cat << EOF | kubectl apply -f -
+apiVersion: snapshot.kubevirt.io/v1beta1
+kind: VirtualMachineSnapshot
+metadata:
+  name: ${snapshot_name}
+  namespace: ${namespace}
+  labels:
+    cks.io/snapshot-type: "base"
+    cks.io/template: "true"
+spec:
+  source:
+    apiGroup: kubevirt.io
+    kind: VirtualMachine
+    name: ${vm_name}
+EOF
+    
+    if [[ $? -eq 0 ]]; then
+        log_success "Final snapshot ${snapshot_name} creation initiated"
         
-        if [[ "$ready" == "true" ]]; then
-            log_success "Snapshot ${snapshot_name} is ready"
-            return 0
+        # Wait for snapshot to be ready
+        log_info "Waiting for final snapshot ${snapshot_name} to be ready..."
+        kubectl wait vmsnapshot ${snapshot_name} -n ${namespace} --for condition=Ready --timeout=600s
+        
+        if [[ $? -eq 0 ]]; then
+            log_success "Final snapshot ${snapshot_name} is ready"
+        else
+            log_error "Final snapshot ${snapshot_name} failed to become ready"
+            return 1
         fi
-        
-        # Show progress every 30 seconds
-        if [[ $((count % 30)) -eq 0 ]] && [[ $count -gt 0 ]]; then
-            local phase=$(kubectl get vmsnapshot "$snapshot_name" -n "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-            log_info "Snapshot ${snapshot_name} status: ${phase} (${count}s elapsed)"
-        fi
-        
-        sleep 5
-        ((count+=5))
-        echo -n "."
-    done
-    echo
-    
-    log_error "Snapshot ${snapshot_name} not ready within ${timeout} seconds"
-    return 1
+    else
+        log_error "Failed to create final snapshot ${snapshot_name}"
+        return 1
+    fi
 }
 
 # Create vm-templates namespace if it doesn't exist
@@ -289,9 +350,12 @@ cleanup_on_error() {
     # Optionally cleanup partial snapshots
     kubectl delete vmsnapshot cks-control-plane-base-snapshot -n vm-templates 2>/dev/null || true
     kubectl delete vmsnapshot cks-worker-base-snapshot -n vm-templates 2>/dev/null || true
+    kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" 2>/dev/null || true
+    kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" 2>/dev/null || true
 }
 
-# Main function
+# Main function - simplified version that works
+# Updated main function
 main() {
     local session_id="$1"
     local namespace="user-session-${session_id}"
@@ -310,57 +374,55 @@ main() {
     # Ensure target namespace exists
     ensure_vm_templates_namespace
     
-    # Delete existing snapshots if they exist (in both namespaces)
-    log_info "Cleaning up existing snapshots..."
-    kubectl delete vmsnapshot cks-control-plane-base-snapshot -n "$namespace" 2>/dev/null || true
-    kubectl delete vmsnapshot cks-worker-base-snapshot -n "$namespace" 2>/dev/null || true
+    # Delete existing snapshots and VMs if they exist
+    log_info "Cleaning up existing snapshots and template VMs..."
     kubectl delete vmsnapshot cks-control-plane-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmsnapshot cks-worker-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vm cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmrestore restore-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmrestore restore-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" 2>/dev/null || true
+    kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" 2>/dev/null || true
     
     # Stop VMs for consistent snapshots
     stop_vm "$control_plane_vm" "$namespace"
     stop_vm "$worker_vm" "$namespace"
     
-    # Create snapshots in the same namespace as the VMs
-    create_snapshot "$control_plane_vm" "$namespace" "cks-control-plane-base-snapshot" "$namespace"
-    create_snapshot "$worker_vm" "$namespace" "cks-worker-base-snapshot" "$namespace"
+    # Create initial snapshots in the session namespace
+    create_snapshot "$control_plane_vm" "$namespace" "temp-control-plane-snapshot"
+    create_snapshot "$worker_vm" "$namespace" "temp-worker-snapshot"
     
     # Start VMs back up
     start_vm "$control_plane_vm" "$namespace"
     start_vm "$worker_vm" "$namespace"
     
-    # Wait for snapshots to be ready and copy to vm-templates
-    copy_snapshot_to_templates "cks-control-plane-base-snapshot" "$namespace" "$vm_templates_ns" &
-    local cp_pid=$!
+    log_info "Initial snapshots created successfully!"
+    echo
     
-    copy_snapshot_to_templates "cks-worker-base-snapshot" "$namespace" "$vm_templates_ns" &
-    local worker_pid=$!
+    # Restore VMs to vm-templates namespace
+    log_info "Restoring VMs to vm-templates namespace..."
+    restore_vm_to_templates "temp-control-plane-snapshot" "$namespace" "$vm_templates_ns" "cks-control-plane-base"
+    restore_vm_to_templates "temp-worker-snapshot" "$namespace" "$vm_templates_ns" "cks-worker-base"
     
-    # Wait for both copy operations
-    local failed=0
-    if ! wait $cp_pid; then
-        log_error "Control plane snapshot copy failed"
-        failed=1
-    fi
+    # Create final snapshots with standard names
+    log_info "Creating final snapshots with standard names..."
+    create_final_snapshot "cks-control-plane-base" "$vm_templates_ns" "cks-control-plane-base-snapshot"
+    create_final_snapshot "cks-worker-base" "$vm_templates_ns" "cks-worker-base-snapshot"
     
-    if ! wait $worker_pid; then
-        log_error "Worker snapshot copy failed"
-        failed=1
-    fi
-    
-    if [[ $failed -eq 1 ]]; then
-        log_error "One or more snapshot copies failed"
-        exit 1
-    fi
+    # Cleanup temporary snapshots
+    log_info "Cleaning up temporary snapshots..."
+    kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" || true
+    kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" || true
     
     # Show final status
-    log_success "All snapshots created and copied successfully!"
+    log_success "All snapshots created successfully!"
     echo
-    log_info "Snapshots in source namespace:"
-    kubectl get vmsnapshot -n "$namespace" -o custom-columns="NAME:.metadata.name,READY:.status.readyToUse,PHASE:.status.phase,AGE:.metadata.creationTimestamp"
-    echo
-    log_info "Snapshots in vm-templates namespace:"
+    log_info "Final snapshots in vm-templates namespace:"
     kubectl get vmsnapshot -n "$vm_templates_ns" -o custom-columns="NAME:.metadata.name,READY:.status.readyToUse,PHASE:.status.phase,AGE:.metadata.creationTimestamp"
+    echo
+    log_info "Template VMs in vm-templates namespace:"
+    kubectl get vm -n "$vm_templates_ns" -o custom-columns="NAME:.metadata.name,RUNNING:.spec.running,READY:.status.ready,AGE:.metadata.creationTimestamp"
     
     echo
     log_success "Session ${session_id} snapshots are ready for fast provisioning!"
