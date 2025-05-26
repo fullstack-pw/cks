@@ -208,52 +208,113 @@ EOF
     fi
 }
 
-# Create VM from snapshot using Clone API - the correct KubeVirt way
-create_vm_from_snapshot() {
-    local snapshot_name="$1"
+# Create DataVolume from VirtualMachineSnapshot using VirtualMachineExport
+create_datavolume_from_export() {
+    local vmsnapshot_name="$1"
     local source_namespace="$2"
     local target_namespace="$3"
-    local new_vm_name="$4"
+    local datavolume_name="$4"
     
-    log_info "Creating VM ${new_vm_name} from snapshot ${snapshot_name} using Clone API..."
+    log_info "Creating DataVolume ${datavolume_name} from VirtualMachineSnapshot ${vmsnapshot_name} using export..."
     
-    # Create a Clone object that references the snapshot
+    # Step 1: Create VirtualMachineExport with SHORT name to avoid 63-char limit
+    local session_id=$(echo "$source_namespace" | sed 's/user-session-//')
+    local export_name
+    if [[ "$datavolume_name" == *"control-plane"* ]]; then
+        export_name="cp-${session_id}"
+    else
+        export_name="wk-${session_id}"
+    fi
+    
+    log_info "Creating VirtualMachineExport ${export_name}..."
+    
     cat << EOF | kubectl apply -f -
-apiVersion: clone.kubevirt.io/v1alpha1
-kind: VirtualMachineClone
+apiVersion: export.kubevirt.io/v1beta1
+kind: VirtualMachineExport
 metadata:
-  name: clone-${new_vm_name}
+  name: ${export_name}
+  namespace: ${source_namespace}
 spec:
   source:
     apiGroup: snapshot.kubevirt.io
     kind: VirtualMachineSnapshot
-    name: ${snapshot_name}
-  target:
-    apiGroup: kubevirt.io
-    kind: VirtualMachine
-    name: ${new_vm_name}
+    name: ${vmsnapshot_name}
+  ttlDuration: 1h
 EOF
+
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to create VirtualMachineExport ${export_name}"
+        return 1
+    fi
     
+    # Step 2: Wait for export to be ready
+    log_info "Waiting for VirtualMachineExport ${export_name} to be ready..."
+    kubectl wait vmexport ${export_name} -n ${source_namespace} --for condition=Ready --timeout=600s
+    
+    if [[ $? -ne 0 ]]; then
+        log_error "VirtualMachineExport ${export_name} failed to become ready"
+        return 1
+    fi
+    
+    # Step 3: Get the export URL for the rootdisk volume
+    local export_url
+    export_url=$(kubectl get vmexport "$export_name" -n "$source_namespace" -o jsonpath='{.status.links.internal.volumes[0].formats[0].url}}')
+    
+    if [[ -z "$export_url" ]]; then
+        log_error "Could not get export URL from VirtualMachineExport ${export_name}"
+        # Let's check what URLs are available
+        log_info "Available export links:"
+        kubectl get vmexport "$export_name" -n "$source_namespace" -o jsonpath='{.status.links}' || true
+        return 1
+    fi
+    
+    log_info "Found export URL: ${export_url}"
+    
+    # Step 4: Create DataVolume that imports from the export URL
+    log_info "Creating DataVolume ${datavolume_name} from export URL..."
+    
+    cat << EOF | kubectl apply -f -
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: ${datavolume_name}
+  namespace: ${target_namespace}
+  labels:
+    cks.io/image-type: "snapshot-base"
+    cks.io/source-session: "${session_id}"
+spec:
+  pvc:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 30Gi
+    storageClassName: longhorn
+  source:
+    http:
+      url: "${export_url}"
+EOF
+
     if [[ $? -eq 0 ]]; then
-        log_success "VirtualMachineClone created for ${new_vm_name}"
+        log_success "DataVolume ${datavolume_name} creation initiated"
         
-        # Wait for clone to complete
-        log_info "Waiting for clone to complete..."
-        if kubectl wait vmclone clone-${new_vm_name} -n ${target_namespace} --for condition=Ready --timeout=600s; then
-            log_success "VM ${new_vm_name} cloned successfully to ${target_namespace}"
+        # Wait for DataVolume to be ready
+        log_info "Waiting for DataVolume ${datavolume_name} to be ready..."
+        kubectl wait datavolume ${datavolume_name} -n ${target_namespace} --for condition=Ready --timeout=1200s
+        
+        if [[ $? -eq 0 ]]; then
+            log_success "DataVolume ${datavolume_name} is ready"
             
-            # Cleanup the clone object
-            kubectl delete vmclone clone-${new_vm_name} -n ${target_namespace}
-            log_info "Clone object cleaned up"
+            # Cleanup the export
+            log_info "Cleaning up VirtualMachineExport ${export_name}..."
+            kubectl delete vmexport ${export_name} -n ${source_namespace} || true
             
-            return 0
         else
-            log_error "VM clone failed for ${new_vm_name}"
-            kubectl describe vmclone clone-${new_vm_name} -n ${target_namespace}
+            log_error "DataVolume ${datavolume_name} failed to become ready"
             return 1
         fi
     else
-        log_error "Failed to create VirtualMachineClone for ${new_vm_name}"
+        log_error "Failed to create DataVolume ${datavolume_name}"
         return 1
     fi
 }
@@ -327,19 +388,11 @@ cleanup_on_error() {
     start_vm "$control_plane_vm" "$namespace" || true
     start_vm "$worker_vm" "$namespace" || true
     
-    # Cleanup partial snapshots
-    kubectl delete vmsnapshot cks-control-plane-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmsnapshot cks-worker-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" 2>/dev/null || true
-    kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" 2>/dev/null || true
-    
-    # Cleanup clone objects
-    kubectl delete vmclone clone-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmclone clone-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
-    
-    # Cleanup template VMs
-    kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vm cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
+    # Cleanup partial DataVolumes and snapshots
+    # kubectl delete datavolume cp-base-image -n "$vm_templates_ns" 2>/dev/null || true
+    # kubectl delete datavolume wk-base-image -n "$vm_templates_ns" 2>/dev/null || true
+    # kubectl delete vmsnapshot temp-cp-snapshot -n "$namespace" 2>/dev/null || true
+    # kubectl delete vmsnapshot temp-wk-snapshot -n "$namespace" 2>/dev/null || true
 }
 
 
@@ -370,51 +423,42 @@ main() {
     kubectl delete vm cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmclone clone-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmclone clone-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" 2>/dev/null || true
-    kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" 2>/dev/null || true
+    kubectl delete vmsnapshot temp-cp-snapshot -n "$namespace" 2>/dev/null || true
+    kubectl delete vmsnapshot temp-wk-snapshot -n "$namespace" 2>/dev/null || true
     
     # Stop VMs for consistent snapshots
     stop_vm "$control_plane_vm" "$namespace"
     stop_vm "$worker_vm" "$namespace"
     
     # Create initial snapshots in the session namespace
-    create_snapshot "$control_plane_vm" "$namespace" "temp-control-plane-snapshot"
-    create_snapshot "$worker_vm" "$namespace" "temp-worker-snapshot"
-    
-    # Start VMs back up
-    start_vm "$control_plane_vm" "$namespace"
-    start_vm "$worker_vm" "$namespace"
+    create_snapshot "$control_plane_vm" "$namespace" "temp-cp-snapshot"
+    create_snapshot "$worker_vm" "$namespace" "temp-wk-snapshot"
     
     log_info "Initial snapshots created successfully!"
     echo
     
-    # Create VMs in vm-templates namespace using Clone API
-    log_info "Creating template VMs from snapshots using Clone API..."
-    create_vm_from_snapshot "temp-control-plane-snapshot" "$namespace" "$vm_templates_ns" "cks-control-plane-base"
-    create_vm_from_snapshot "temp-worker-snapshot" "$namespace" "$vm_templates_ns" "cks-worker-base"
-    
-    # Create final snapshots with standard names
-    log_info "Creating final snapshots with standard names..."
-    create_final_snapshot "cks-control-plane-base" "$vm_templates_ns" "cks-control-plane-base-snapshot"
-    create_final_snapshot "cks-worker-base" "$vm_templates_ns" "cks-worker-base-snapshot"
-    
+    # Create DataVolumes in vm-templates namespace from exported snapshots
+    log_info "Creating DataVolumes from exported snapshots for golden image use..."
+    create_datavolume_from_export "temp-cp-snapshot" "$namespace" "$vm_templates_ns" "cp-base-image"
+    create_datavolume_from_export "temp-wk-snapshot" "$namespace" "$vm_templates_ns" "wk-base-image"
+
+    # Start VMs back up
+    start_vm "$control_plane_vm" "$namespace"
+    start_vm "$worker_vm" "$namespace"
+
     # Cleanup temporary snapshots
     log_info "Cleaning up temporary snapshots..."
-    kubectl delete vmsnapshot temp-control-plane-snapshot -n "$namespace" || true
-    kubectl delete vmsnapshot temp-worker-snapshot -n "$namespace" || true
-    
-    # Cleanup template VMs after snapshots are created
-    log_info "Cleaning up template VMs..."
-    kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" || true
-    kubectl delete vm cks-worker-base -n "$vm_templates_ns" || true
+    kubectl delete vmsnapshot temp-cp-snapshot -n "$namespace" || true
+    kubectl delete vmsnapshot temp-wk-snapshot -n "$namespace" || true
     
     # Show final status
-    log_success "All snapshots created successfully!"
+    log_success "All DataVolumes created successfully!"
     echo
-    log_info "Final snapshots in vm-templates namespace:"
-    kubectl get vmsnapshot -n "$vm_templates_ns" -o custom-columns="NAME:.metadata.name,READY:.status.readyToUse,PHASE:.status.phase,AGE:.metadata.creationTimestamp"
+    log_info "Golden image DataVolumes in vm-templates namespace:"
+    kubectl get datavolume -n "$vm_templates_ns" -o custom-columns="NAME:.metadata.name,PHASE:.status.phase,PROGRESS:.status.progress,AGE:.metadata.creationTimestamp"
     echo
-    
+    log_info "Golden image PVCs in vm-templates namespace:"
+    kubectl get pvc -n "$vm_templates_ns" -l cks.io/image-type=snapshot-base -o custom-columns="NAME:.metadata.name,STATUS:.status.phase,SIZE:.spec.resources.requests.storage,AGE:.metadata.creationTimestamp"    
     echo
     log_success "Session ${session_id} snapshots are ready for fast provisioning!"
     log_info "These snapshots will be used automatically for future session creation"
