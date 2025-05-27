@@ -258,7 +258,7 @@ EOF
     
     # Step 3: Get the export URL for the rootdisk volume
     local export_url
-    export_url=$(kubectl get vmexport "$export_name" -n "$source_namespace" -o jsonpath='{.status.links.internal.volumes[0].formats[0].url}}')
+    export_url=$(kubectl get vmexport "$export_name" -n "$source_namespace" -o jsonpath='{.status.links.external.volumes[0].formats[0].url}')
     
     if [[ -z "$export_url" ]]; then
         log_error "Could not get export URL from VirtualMachineExport ${export_name}"
@@ -288,7 +288,7 @@ spec:
       - ReadWriteOnce
     resources:
       requests:
-        storage: 30Gi
+        storage: 10Gi
     storageClassName: longhorn
   source:
     http:

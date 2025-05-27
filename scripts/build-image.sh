@@ -26,7 +26,7 @@ fi
 cp "${BASE_IMAGE}" "${OUTPUT_IMAGE}"
 
 # Resize the image to have enough space
-qemu-img resize "${OUTPUT_IMAGE}" +20G
+qemu-img resize "${OUTPUT_IMAGE}" +3G
 
 # Install necessary tools for image manipulation
 sudo dnf update
@@ -112,10 +112,10 @@ metadata:
 spec:
   pvc:
     accessModes:
-      - ReadWriteOnce
+      - ReadWriteMany
     resources:
       requests:
-        storage: 20Gi
+        storage: 10Gi
     storageClassName: ${STORAGECLASS}
   source:
     http:
@@ -142,6 +142,10 @@ spec:
     volumeMounts:
     - name: data
       mountPath: /data
+    resources:
+      limits:
+        cpu: "2000m"
+        memory: "2Gi"
   restartPolicy: Never
 EOF
 

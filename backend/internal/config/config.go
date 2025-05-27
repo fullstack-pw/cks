@@ -59,7 +59,7 @@ func LoadConfig() (*Config, error) {
 		KubernetesVersion:    getEnv("KUBERNETES_VERSION", "1.33.0"),
 		VMCPUCores:           getEnv("VM_CPU_CORES", "2"),
 		VMMemory:             getEnv("VM_MEMORY", "2Gi"),
-		VMStorageSize:        getEnv("VM_STORAGE_SIZE", "30Gi"),
+		VMStorageSize:        getEnv("VM_STORAGE_SIZE", "10Gi"),
 		VMStorageClass:       getEnv("VM_STORAGE_CLASS", "longhorn"),
 		VMImageURL:           getEnv("VM_IMAGE_URL", "https://cloud-images.ubuntu.com/releases/22.04/release/ubuntu-22.04-server-cloudimg-amd64.img"),
 		PodCIDR:              getEnv("POD_CIDR", "10.0.0.0/8"),
