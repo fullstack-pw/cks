@@ -102,6 +102,7 @@ const TerminalContainer = ({ sessionId }) => {
 
         const updates = {};
         for (const [terminalId, terminalInfo] of Object.entries(session.activeTerminals)) {
+            // Always try to reuse terminals marked as active, even if disconnected
             if (terminalInfo.status === 'active') {
                 updates[terminalInfo.target] = {
                     id: terminalId,
@@ -109,6 +110,8 @@ const TerminalContainer = ({ sessionId }) => {
                     error: null,
                     connected: false // Will be updated when WebSocket connects
                 };
+
+                console.log(`Reusing terminal ${terminalId} for ${terminalInfo.target}`);
             }
         }
 
@@ -118,6 +121,8 @@ const TerminalContainer = ({ sessionId }) => {
                 ...updates
             }));
             hasInitialized.current = true;
+
+            console.log(`Initialized ${Object.keys(updates).length} existing terminals`);
         }
     }, []);
 
@@ -154,13 +159,15 @@ const TerminalContainer = ({ sessionId }) => {
                         error: null
                     });
 
-                    // Initialize existing terminals from session
+                    // ALWAYS try to initialize existing terminals from session
                     await initializeExistingTerminals(session);
 
-                    // Create control plane terminal if no existing terminals
+                    // Only create control plane terminal if no terminals exist at all
                     if (!hasInitialized.current &&
                         !terminalSessions['control-plane'].id &&
-                        !terminalSessions['control-plane'].isLoading) {
+                        !terminalSessions['control-plane'].isLoading &&
+                        Object.keys(session.activeTerminals || {}).length === 0) {
+                        console.log('No existing terminals found, creating control plane terminal');
                         createOrGetTerminalSession('control-plane');
                     }
                 } else if (session.status === 'failed') {
@@ -191,19 +198,26 @@ const TerminalContainer = ({ sessionId }) => {
             }
         };
 
-        // Check immediately, no polling needed for cluster pool sessions
+        // Check immediately
         checkSessionStatus();
+
+        // Add a single retry after 2 seconds for better terminal recovery
+        const retryTimeout = setTimeout(() => {
+            if (isMounted.current && sessionStatus.isReady && !hasInitialized.current) {
+                console.log('Retrying terminal initialization after page refresh');
+                checkSessionStatus();
+            }
+        }, 2000);
 
         // Cleanup function
         const cleanup = () => {
-            // No polling to cleanup
+            clearTimeout(retryTimeout);
         };
 
         cleanupFunctions.current.push(cleanup);
 
         return cleanup;
-    }, [sessionId, createOrGetTerminalSession, terminalSessions, initializeExistingTerminals]);
-
+    }, [sessionId, createOrGetTerminalSession, terminalSessions, initializeExistingTerminals, sessionStatus.isReady]);
     return (
         <div className="h-full flex flex-col">
             {/* Terminal tabs */}

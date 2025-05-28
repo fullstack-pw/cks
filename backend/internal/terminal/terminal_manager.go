@@ -60,22 +60,37 @@ func NewManager(kubeClient kubernetes.Interface, kubevirtClient *kubevirt.Client
 	return tm
 }
 
-// CreateSession creates a new terminal session
+// CreateSession creates a new terminal session or reuses existing one
 func (tm *Manager) CreateSession(sessionID, namespace, target string) (string, error) {
 	tm.lock.Lock()
 	defer tm.lock.Unlock()
 
-	// Generate unique terminal ID
-	terminalID := fmt.Sprintf("%s-%s-%d", sessionID, target, time.Now().Unix())
+	// Generate deterministic terminal ID based on session and target
+	terminalID := fmt.Sprintf("%s-%s", sessionID, target)
 
-	// Create session
+	// Check if terminal session already exists
+	if existingSession, exists := tm.sessions[terminalID]; exists {
+		// Update last used time
+		existingSession.LastUsed = time.Now()
+
+		tm.logger.WithFields(logrus.Fields{
+			"terminalID": terminalID,
+			"sessionID":  sessionID,
+			"target":     target,
+		}).Info("Reusing existing terminal session")
+
+		return terminalID, nil
+	}
+
+	// Create new session
 	session := &Session{
-		ID:        terminalID,
-		SessionID: sessionID,
-		Target:    target,
-		Namespace: namespace,
-		Created:   time.Now(),
-		LastUsed:  time.Now(),
+		ID:               terminalID,
+		SessionID:        sessionID,
+		Target:           target,
+		Namespace:        namespace,
+		Created:          time.Now(),
+		LastUsed:         time.Now(),
+		ActiveConnection: false,
 	}
 
 	// Store session
@@ -84,7 +99,7 @@ func (tm *Manager) CreateSession(sessionID, namespace, target string) (string, e
 		"terminalID": terminalID,
 		"namespace":  namespace,
 		"target":     target,
-	}).Info("Terminal session created")
+	}).Info("New terminal session created with deterministic ID")
 
 	return terminalID, nil
 }
@@ -122,7 +137,7 @@ func (tm *Manager) CloseSession(terminalID string) error {
 	return nil
 }
 
-// HandleTerminal handles a WebSocket connection for a terminal session
+// HandleTerminal handles WebSocket connection to a terminal session
 func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, terminalID string) {
 	// Get session
 	session, err := tm.GetSession(terminalID)
@@ -136,12 +151,12 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	session.ConnectionMutex.Lock()
 	if session.ActiveConnection {
 		session.ConnectionMutex.Unlock()
-		tm.logger.WithField("terminalID", terminalID).Warn("Connection already exists, rejecting new connection")
-		http.Error(w, "Another connection to this terminal is already active", http.StatusConflict)
-		return
+		tm.logger.WithField("terminalID", terminalID).Info("Existing connection found, allowing reconnection")
+		// Allow reconnection - don't reject, just proceed
+	} else {
+		session.ActiveConnection = true
+		session.ConnectionMutex.Unlock()
 	}
-	session.ActiveConnection = true
-	session.ConnectionMutex.Unlock()
 
 	// Set up websocket
 	upgrader := websocket.Upgrader{
@@ -161,7 +176,12 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 		session.ConnectionMutex.Unlock()
 		return
 	}
-	defer ws.Close()
+	defer func() {
+		ws.Close()
+		session.ConnectionMutex.Lock()
+		session.ActiveConnection = false
+		session.ConnectionMutex.Unlock()
+	}()
 
 	tm.logger.WithFields(logrus.Fields{
 		"terminalID": terminalID,
@@ -175,11 +195,6 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 
 	// Handle virtctl SSH connection
 	tm.handleVirtctlSSHConnection(ctx, session, ws)
-
-	// Mark the session as inactive
-	session.ConnectionMutex.Lock()
-	session.ActiveConnection = false
-	session.ConnectionMutex.Unlock()
 }
 
 // ResizeTerminal resizes a terminal session

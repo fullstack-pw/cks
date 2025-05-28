@@ -90,26 +90,29 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// NEW: Check for existing terminal first
-	if existingTerminalID, isExisting, err := tc.sessionService.GetOrCreateTerminalSession(sessionID, request.Target); err != nil {
+	// Check for existing terminal first (with deterministic ID logic)
+	expectedTerminalID, isExisting, err := tc.sessionService.GetOrCreateTerminalSession(sessionID, request.Target)
+	if err != nil {
 		tc.logger.WithError(err).Error("Failed to check existing terminals")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to check terminals: %v", err)})
 		return
-	} else if isExisting {
+	}
+
+	if isExisting {
 		// Return existing terminal
 		tc.logger.WithFields(logrus.Fields{
 			"sessionID":  sessionID,
-			"terminalID": existingTerminalID,
+			"terminalID": expectedTerminalID,
 			"target":     request.Target,
 		}).Info("Returning existing terminal session")
 
 		c.JSON(http.StatusOK, models.CreateTerminalResponse{
-			TerminalID: existingTerminalID,
+			TerminalID: expectedTerminalID,
 		})
 		return
 	}
 
-	// Create new terminal session (existing logic)
+	// Create new terminal session using the expected deterministic ID
 	terminalID, err := tc.terminalService.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to create terminal session")
@@ -117,7 +120,15 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// NEW: Store terminal info in session
+	// Verify the created terminal ID matches expected deterministic pattern
+	if terminalID != expectedTerminalID {
+		tc.logger.WithFields(logrus.Fields{
+			"createdTerminalID":  terminalID,
+			"expectedTerminalID": expectedTerminalID,
+		}).Warn("Terminal ID mismatch detected")
+	}
+
+	// Store terminal info in session
 	err = tc.sessionService.StoreTerminalSession(sessionID, terminalID, request.Target)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to store terminal session info")
@@ -141,7 +152,7 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		"sessionID":  sessionID,
 		"terminalID": terminalID,
 		"target":     request.Target,
-	}).Info("Terminal session created")
+	}).Info("Terminal session created with deterministic ID")
 
 	c.JSON(http.StatusCreated, models.CreateTerminalResponse{
 		TerminalID: terminalID,

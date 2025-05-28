@@ -861,30 +861,34 @@ func (sm *SessionManager) GetOrCreateTerminalSession(sessionID, target string) (
 		return "", false, fmt.Errorf("session not found: %s", sessionID)
 	}
 
+	// Generate deterministic terminal ID (matching TerminalManager logic)
+	expectedTerminalID := fmt.Sprintf("%s-%s", sessionID, target)
+
 	// Initialize ActiveTerminals if nil
 	if session.ActiveTerminals == nil {
-		session.ActiveTerminals = make(map[string]models.TerminalInfo) // Use models.TerminalInfo
+		session.ActiveTerminals = make(map[string]models.TerminalInfo)
 	}
 
-	// Look for existing active terminal for this target
-	for terminalID, terminalInfo := range session.ActiveTerminals {
-		if terminalInfo.Target == target && terminalInfo.Status == "active" {
+	// Check if terminal already exists with the expected ID
+	if terminalInfo, exists := session.ActiveTerminals[expectedTerminalID]; exists {
+		if terminalInfo.Status == "active" {
 			// Update last used time
 			terminalInfo.LastUsedAt = time.Now()
-			session.ActiveTerminals[terminalID] = terminalInfo
+			session.ActiveTerminals[expectedTerminalID] = terminalInfo
 
 			sm.logger.WithFields(logrus.Fields{
 				"sessionID":  sessionID,
-				"terminalID": terminalID,
+				"terminalID": expectedTerminalID,
 				"target":     target,
-			}).Info("Reusing existing terminal session")
+			}).Info("Reusing existing terminal session with deterministic ID")
 
-			return terminalID, true, nil // true = existing terminal
+			return expectedTerminalID, true, nil // true = existing terminal
 		}
 	}
 
-	// No existing terminal found, will need to create new one
-	return "", false, nil // false = needs new terminal
+	// No existing active terminal found, will need to create new one
+	// Return the deterministic ID that should be created
+	return expectedTerminalID, false, nil // false = needs new terminal
 }
 
 // StoreTerminalSession stores terminal info in session
@@ -897,13 +901,25 @@ func (sm *SessionManager) StoreTerminalSession(sessionID, terminalID, target str
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
 
-	// Initialize ActiveTerminals if nil
-	if session.ActiveTerminals == nil {
-		session.ActiveTerminals = make(map[string]models.TerminalInfo) // Use models.TerminalInfo
+	// Verify that the terminalID matches our deterministic pattern
+	expectedTerminalID := fmt.Sprintf("%s-%s", sessionID, target)
+	if terminalID != expectedTerminalID {
+		sm.logger.WithFields(logrus.Fields{
+			"sessionID":          sessionID,
+			"providedTerminalID": terminalID,
+			"expectedTerminalID": expectedTerminalID,
+			"target":             target,
+		}).Warn("Terminal ID mismatch - using expected deterministic ID")
+		terminalID = expectedTerminalID
 	}
 
-	// Store terminal info
-	session.ActiveTerminals[terminalID] = models.TerminalInfo{ // Use models.TerminalInfo
+	// Initialize ActiveTerminals if nil
+	if session.ActiveTerminals == nil {
+		session.ActiveTerminals = make(map[string]models.TerminalInfo)
+	}
+
+	// Store or update terminal info
+	session.ActiveTerminals[terminalID] = models.TerminalInfo{
 		ID:         terminalID,
 		Target:     target,
 		Status:     "active",
@@ -921,7 +937,7 @@ func (sm *SessionManager) StoreTerminalSession(sessionID, terminalID, target str
 		"sessionID":  sessionID,
 		"terminalID": terminalID,
 		"target":     target,
-	}).Info("Stored terminal session info")
+	}).Info("Stored terminal session info with deterministic ID")
 
 	return nil
 }
