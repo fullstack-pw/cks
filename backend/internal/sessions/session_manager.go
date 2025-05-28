@@ -1005,6 +1005,14 @@ func (sm *SessionManager) bootstrapClusterInNamespace(ctx context.Context, clust
 	}
 
 	sm.logger.WithField("clusterID", clusterID).Info("Cluster bootstrap completed")
+
+	// ADD THIS LINE - Mark cluster as available in the pool
+	err = sm.clusterPool.MarkClusterAvailable(clusterID)
+	if err != nil {
+		sm.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to mark cluster as available")
+		return fmt.Errorf("failed to mark cluster available: %w", err)
+	}
+
 	return nil
 }
 

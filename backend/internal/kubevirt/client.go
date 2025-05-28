@@ -389,7 +389,7 @@ func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string)
 		"CONTROL_PLANE_VM_NAME":  fmt.Sprintf("cp-%s", namespace),
 		"WORKER_VM_NAME":         fmt.Sprintf("wk-%s", namespace),
 		"SESSION_NAMESPACE":      namespace,
-		"SESSION_ID":             strings.TrimPrefix(namespace, "cluster"),
+		"SESSION_ID":             namespace,
 		"K8S_VERSION":            c.config.KubernetesVersion,
 		"CPU_CORES":              c.config.VMCPUCores,
 		"MEMORY":                 c.config.VMMemory,
@@ -409,7 +409,14 @@ func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string)
 
 	// Substitute variables in the VM template
 	renderedVM := substituteEnvVars(string(templateContent), data)
-
+	logrus.WithFields(logrus.Fields{
+		"vmName":    vmName,
+		"vmType":    vmType,
+		"namespace": namespace,
+	}).Debug("Rendered VM YAML content:")
+	logrus.Debug("=== RENDERED VM YAML START ===")
+	logrus.Debug(renderedVM)
+	logrus.Debug("=== RENDERED VM YAML END ===")
 	// Apply VM using kubectl
 	return applyYAML(ctx, renderedVM)
 }
