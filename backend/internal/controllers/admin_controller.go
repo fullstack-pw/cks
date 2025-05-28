@@ -2,25 +2,29 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 
+	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/sessions"
 )
 
 // AdminController handles administrative operations
 type AdminController struct {
 	sessionManager *sessions.SessionManager
+	kubevirtClient *kubevirt.Client // ADD THIS
 	logger         *logrus.Logger
 }
 
 // NewAdminController creates a new admin controller
-func NewAdminController(sessionManager *sessions.SessionManager, logger *logrus.Logger) *AdminController {
+func NewAdminController(sessionManager *sessions.SessionManager, kubevirtClient *kubevirt.Client, logger *logrus.Logger) *AdminController {
 	return &AdminController{
 		sessionManager: sessionManager,
+		kubevirtClient: kubevirtClient, // ADD THIS
 		logger:         logger,
 	}
 }
@@ -30,6 +34,7 @@ func (ac *AdminController) RegisterRoutes(router *gin.Engine) {
 	admin := router.Group("/api/v1/admin")
 	{
 		admin.POST("/bootstrap-pool", ac.BootstrapClusterPool)
+		admin.POST("/create-snapshots", ac.CreatePoolSnapshots)
 	}
 }
 
@@ -56,4 +61,88 @@ func (ac *AdminController) BootstrapClusterPool(c *gin.Context) {
 		"clusters": []string{"cluster1", "cluster2", "cluster3"},
 		"status":   "completed",
 	})
+}
+
+// CreatePoolSnapshots creates snapshots from all clusters in the pool
+func (ac *AdminController) CreatePoolSnapshots(c *gin.Context) {
+	ac.logger.Info("Admin request to create pool snapshots")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Minute)
+	defer cancel()
+
+	// Create snapshots for all 3 clusters
+	results := make(map[string]interface{})
+	clusterIDs := []string{"cluster1", "cluster2", "cluster3"}
+
+	for _, clusterID := range clusterIDs {
+		ac.logger.WithField("clusterID", clusterID).Info("Creating snapshots for cluster")
+
+		result, err := ac.createClusterSnapshots(ctx, clusterID)
+		if err != nil {
+			ac.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to create snapshots")
+			results[clusterID] = map[string]interface{}{
+				"success": false,
+				"error":   err.Error(),
+			}
+		} else {
+			results[clusterID] = result
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "Snapshot creation completed",
+		"results": results,
+	})
+}
+
+// createClusterSnapshots creates snapshots for both VMs in a specific cluster
+func (ac *AdminController) createClusterSnapshots(ctx context.Context, clusterID string) (map[string]interface{}, error) {
+	namespace := clusterID // namespace matches clusterID
+	controlPlaneVM := fmt.Sprintf("cp-%s", clusterID)
+	workerVM := fmt.Sprintf("wk-%s", clusterID)
+
+	// Generate snapshot names
+	cpSnapshotName := fmt.Sprintf("cp-%s-snapshot", clusterID)
+	wkSnapshotName := fmt.Sprintf("wk-%s-snapshot", clusterID)
+
+	ac.logger.WithFields(logrus.Fields{
+		"clusterID":      clusterID,
+		"namespace":      namespace,
+		"controlPlaneVM": controlPlaneVM,
+		"workerVM":       workerVM,
+		"cpSnapshot":     cpSnapshotName,
+		"wkSnapshot":     wkSnapshotName,
+	}).Info("Creating cluster snapshots")
+
+	// Create control plane snapshot
+	err := ac.kubevirtClient.CreateVMSnapshot(ctx, namespace, controlPlaneVM, cpSnapshotName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create control plane snapshot: %w", err)
+	}
+
+	// Create worker snapshot
+	err = ac.kubevirtClient.CreateVMSnapshot(ctx, namespace, workerVM, wkSnapshotName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create worker snapshot: %w", err)
+	}
+
+	// Wait for both snapshots to be ready
+	err = ac.kubevirtClient.WaitForSnapshotReady(ctx, namespace, cpSnapshotName)
+	if err != nil {
+		return nil, fmt.Errorf("control plane snapshot failed to become ready: %w", err)
+	}
+
+	err = ac.kubevirtClient.WaitForSnapshotReady(ctx, namespace, wkSnapshotName)
+	if err != nil {
+		return nil, fmt.Errorf("worker snapshot failed to become ready: %w", err)
+	}
+
+	return map[string]interface{}{
+		"success": true,
+		"snapshots": map[string]string{
+			"controlPlane": cpSnapshotName,
+			"worker":       wkSnapshotName,
+		},
+		"namespace": namespace,
+	}, nil
 }
