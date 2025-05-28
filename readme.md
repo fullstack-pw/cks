@@ -207,13 +207,13 @@ scenario-id/
 
 ```bash
 # Check VM status
-kubectl get vmi -n user-session-xxxxx
+kubectl get vmi -n clusterxxxxx
 
 # View VM logs
-kubectl logs -n user-session-xxxxx <vm-name>
+kubectl logs -n clusterxxxxx <vm-name>
 
 # Access VM console directly
-virtctl console -n user-session-xxxxx <vm-name>
+virtctl console -n clusterxxxxx <vm-name>
 ```
 
 ## Contributing

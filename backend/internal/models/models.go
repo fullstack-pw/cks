@@ -249,8 +249,8 @@ type ClusterPool struct {
 	AssignedSession string        `json:"assignedSession,omitempty"`
 	LockTime        time.Time     `json:"lockTime,omitempty"`
 	LastReset       time.Time     `json:"lastReset"`
-	ControlPlaneVM  string        `json:"controlPlaneVM"` // e.g., "cks-control-plane-cluster1"
-	WorkerNodeVM    string        `json:"workerNodeVM"`   // e.g., "cks-worker-node-cluster1"
+	ControlPlaneVM  string        `json:"controlPlaneVM"` // e.g., "cp-cluster1"
+	WorkerNodeVM    string        `json:"workerNodeVM"`   // e.g., "wk-cluster1"
 	CreatedAt       time.Time     `json:"createdAt"`
 	LastHealthCheck time.Time     `json:"lastHealthCheck"`
 }

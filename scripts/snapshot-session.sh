@@ -45,7 +45,7 @@ Examples:
     $SCRIPT_NAME 76c3ac1b
     
 This will create snapshots named:
-    - cks-control-plane-base-snapshot
+    - cp-base-snapshot
     - cks-worker-base-snapshot
     
 In the vm-templates namespace for future fast provisioning.
@@ -67,7 +67,7 @@ check_dependencies() {
 # Validate session exists
 validate_session() {
     local session_id="$1"
-    local namespace="user-session-${session_id}"
+    local namespace="cluster${session_id}"
     
     log_info "Validating session ${session_id}..."
     
@@ -78,8 +78,8 @@ validate_session() {
     fi
     
     # Check if VMs exist
-    local control_plane_vm="cks-control-plane-user-session-${session_id}"
-    local worker_vm="cks-worker-node-user-session-${session_id}"
+    local control_plane_vm="cp-cluster${session_id}"
+    local worker_vm="wk-cluster${session_id}"
     
     if ! kubectl get vm "$control_plane_vm" -n "$namespace" &> /dev/null; then
         log_error "Control plane VM '$control_plane_vm' not found in namespace '$namespace'"
@@ -181,7 +181,7 @@ metadata:
   namespace: ${namespace}
   labels:
     cks.io/snapshot-type: "base"
-    cks.io/source-session: "$(echo "$namespace" | sed 's/user-session-//')"
+    cks.io/source-session: "$(echo "$namespace" | sed 's/cluster//')"
 spec:
   source:
     apiGroup: kubevirt.io
@@ -218,7 +218,7 @@ create_datavolume_from_export() {
     log_info "Creating DataVolume ${datavolume_name} from VirtualMachineSnapshot ${vmsnapshot_name} using export..."
     
     # Step 1: Create VirtualMachineExport with SHORT name to avoid 63-char limit
-    local session_id=$(echo "$source_namespace" | sed 's/user-session-//')
+    local session_id=$(echo "$source_namespace" | sed 's/cluster//')
     local export_name
     if [[ "$datavolume_name" == *"control-plane"* ]]; then
         export_name="cp-${session_id}"
@@ -377,9 +377,9 @@ ensure_vm_templates_namespace() {
 # Enhanced cleanup function for error cases
 cleanup_on_error() {
     local session_id="$1"
-    local namespace="user-session-${session_id}"
-    local control_plane_vm="cks-control-plane-user-session-${session_id}"
-    local worker_vm="cks-worker-node-user-session-${session_id}"
+    local namespace="cluster${session_id}"
+    local control_plane_vm="cp-cluster${session_id}"
+    local worker_vm="wk-cluster${session_id}"
     local vm_templates_ns="vm-templates"
     
     log_warn "Cleaning up after error..."
@@ -399,9 +399,9 @@ cleanup_on_error() {
 # Updated main function using Clone API approach
 main() {
     local session_id="$1"
-    local namespace="user-session-${session_id}"
-    local control_plane_vm="cks-control-plane-user-session-${session_id}"
-    local worker_vm="cks-worker-node-user-session-${session_id}"
+    local namespace="cluster${session_id}"
+    local control_plane_vm="cp-cluster${session_id}"
+    local worker_vm="wk-cluster${session_id}"
     local vm_templates_ns="vm-templates"
     
     log_info "Starting snapshot creation for session: ${session_id}"
@@ -417,11 +417,11 @@ main() {
     
     # Delete existing snapshots and VMs if they exist
     log_info "Cleaning up existing snapshots and template VMs..."
-    kubectl delete vmsnapshot cks-control-plane-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmsnapshot cp-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmsnapshot cks-worker-base-snapshot -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vm cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vm cp-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vm cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
-    kubectl delete vmclone clone-cks-control-plane-base -n "$vm_templates_ns" 2>/dev/null || true
+    kubectl delete vmclone clone-cp-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmclone clone-cks-worker-base -n "$vm_templates_ns" 2>/dev/null || true
     kubectl delete vmsnapshot temp-cp-snapshot -n "$namespace" 2>/dev/null || true
     kubectl delete vmsnapshot temp-wk-snapshot -n "$namespace" 2>/dev/null || true

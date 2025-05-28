@@ -63,8 +63,8 @@ func (m *Manager) initializePool() {
 
 	for _, clusterID := range clusterIDs {
 		// Use consistent naming pattern for VMs
-		controlPlaneVM := fmt.Sprintf("cks-control-plane-%s", clusterID)
-		workerVM := fmt.Sprintf("cks-worker-node-%s", clusterID)
+		controlPlaneVM := fmt.Sprintf("cp-%s", clusterID)
+		workerVM := fmt.Sprintf("wk-%s", clusterID)
 
 		cluster := &models.ClusterPool{
 			ClusterID:       clusterID,

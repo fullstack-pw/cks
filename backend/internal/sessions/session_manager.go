@@ -980,7 +980,7 @@ func (sm *SessionManager) determineProvisioningStrategy(ctx context.Context) mod
 // snapshotsExist checks if required snapshots exist and are ready to use
 func (sm *SessionManager) snapshotsExist(ctx context.Context) bool {
 	// Check if both snapshots exist and are ready
-	controlPlaneExists := sm.checkSnapshotExists(ctx, "cks-control-plane-base-snapshot")
+	controlPlaneExists := sm.checkSnapshotExists(ctx, "cp-base-snapshot")
 	workerExists := sm.checkSnapshotExists(ctx, "cks-worker-base-snapshot")
 
 	sm.logger.WithFields(logrus.Fields{
@@ -1176,7 +1176,7 @@ func (sm *SessionManager) DeleteBaseSnapshots(ctx context.Context) error {
 	sm.logger.Info("Deleting base cluster snapshots")
 
 	namespace := "vm-templates"
-	snapshots := []string{"cks-control-plane-base-snapshot", "cks-worker-base-snapshot"}
+	snapshots := []string{"cp-base-snapshot", "cks-worker-base-snapshot"}
 
 	for _, snapshotName := range snapshots {
 		err := sm.kubevirtClient.DeleteVMSnapshot(ctx, namespace, snapshotName)
@@ -1246,7 +1246,7 @@ func (sm *SessionManager) createSnapshotsFromSession(ctx context.Context, sessio
 	}
 
 	// Delete existing snapshots if they exist
-	existingSnapshots := []string{"cks-control-plane-base-snapshot", "cks-worker-base-snapshot"}
+	existingSnapshots := []string{"cp-base-snapshot", "cks-worker-base-snapshot"}
 	for _, snapshotName := range existingSnapshots {
 		err := sm.kubevirtClient.DeleteVMSnapshot(ctx, snapshotNamespace, snapshotName)
 		if err != nil {
@@ -1262,7 +1262,7 @@ func (sm *SessionManager) createSnapshotsFromSession(ctx context.Context, sessio
 
 	go func() {
 		// Create control plane snapshot by copying VM to vm-templates namespace first
-		err := sm.createVMSnapshotCrossNamespace(ctx, session.Namespace, session.ControlPlaneVM, snapshotNamespace, "cks-control-plane-base-snapshot")
+		err := sm.createVMSnapshotCrossNamespace(ctx, session.Namespace, session.ControlPlaneVM, snapshotNamespace, "cp-base-snapshot")
 		errChan <- err
 	}()
 
@@ -1361,8 +1361,8 @@ func (sm *SessionManager) bootstrapClusterInNamespace(ctx context.Context, clust
 	sm.logger.WithField("clusterID", clusterID).Info("Bootstrapping cluster")
 
 	// Use EXISTING VM naming pattern to avoid breaking join command logic
-	controlPlaneVM := fmt.Sprintf("cks-control-plane-%s", clusterID)
-	workerNodeVM := fmt.Sprintf("cks-worker-node-%s", clusterID)
+	controlPlaneVM := fmt.Sprintf("cp-%s", clusterID)
+	workerNodeVM := fmt.Sprintf("wk-%s", clusterID)
 
 	// Create session object to use with existing provisionFromBootstrap
 	session := &models.Session{

@@ -82,7 +82,7 @@ func (ac *AdminController) GetSnapshotStatus(c *gin.Context) {
 	ctx := c.Request.Context()
 
 	// Get snapshot information
-	controlPlaneInfo := ac.sessionManager.GetSnapshotInfo(ctx, "vm-templates", "cks-control-plane-base-snapshot")
+	controlPlaneInfo := ac.sessionManager.GetSnapshotInfo(ctx, "vm-templates", "cp-base-snapshot")
 	workerInfo := ac.sessionManager.GetSnapshotInfo(ctx, "vm-templates", "cks-worker-base-snapshot")
 
 	// Determine current provisioning strategy

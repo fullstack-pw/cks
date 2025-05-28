@@ -320,10 +320,10 @@ func (c *Client) createCloudInitSecret(ctx context.Context, namespace, vmName, v
 
 	// Create data map for template
 	data := map[string]string{
-		"CONTROL_PLANE_VM_NAME": fmt.Sprintf("cks-control-plane-%s", namespace),
-		"WORKER_VM_NAME":        fmt.Sprintf("cks-worker-node-%s", namespace),
+		"CONTROL_PLANE_VM_NAME": fmt.Sprintf("cp-%s", namespace),
+		"WORKER_VM_NAME":        fmt.Sprintf("wk-%s", namespace),
 		"SESSION_NAMESPACE":     namespace,
-		"SESSION_ID":            strings.TrimPrefix(namespace, "user-session-"),
+		"SESSION_ID":            strings.TrimPrefix(namespace, "cluster"),
 		"K8S_VERSION":           c.config.KubernetesVersion,
 		"POD_CIDR":              c.config.PodCIDR,
 	}
@@ -386,10 +386,10 @@ func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string)
 
 	// Create data map for template
 	data := map[string]string{
-		"CONTROL_PLANE_VM_NAME":  fmt.Sprintf("cks-control-plane-%s", namespace),
-		"WORKER_VM_NAME":         fmt.Sprintf("cks-worker-node-%s", namespace),
+		"CONTROL_PLANE_VM_NAME":  fmt.Sprintf("cp-%s", namespace),
+		"WORKER_VM_NAME":         fmt.Sprintf("wk-%s", namespace),
 		"SESSION_NAMESPACE":      namespace,
-		"SESSION_ID":             strings.TrimPrefix(namespace, "user-session-"),
+		"SESSION_ID":             strings.TrimPrefix(namespace, "cluster"),
 		"K8S_VERSION":            c.config.KubernetesVersion,
 		"CPU_CORES":              c.config.VMCPUCores,
 		"MEMORY":                 c.config.VMMemory,
@@ -541,7 +541,7 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 	}).Info("Getting join command from control plane")
 
 	// Adjust the VM name to match the actual name pattern
-	actualVMName := fmt.Sprintf("cks-control-plane-%s", namespace)
+	actualVMName := fmt.Sprintf("cp-%s", namespace)
 	logrus.WithField("actualVMName", actualVMName).Info("Adjusted VM name for join command")
 
 	// Wait for the VM to be fully ready with kubelet initialized
