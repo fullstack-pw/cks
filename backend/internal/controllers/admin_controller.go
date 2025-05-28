@@ -33,6 +33,7 @@ func (ac *AdminController) RegisterRoutes(router *gin.Engine) {
 		admin.GET("/snapshots/status", ac.GetSnapshotStatus)
 		admin.DELETE("/snapshots", ac.DeleteSnapshots)
 		admin.POST("/snapshots/recreate", ac.RecreateSnapshots)
+		admin.POST("/bootstrap-pool", ac.BootstrapClusterPool)
 	}
 }
 
@@ -177,5 +178,30 @@ func (ac *AdminController) RecreateSnapshots(c *gin.Context) {
 		"message":   "Base snapshots recreated successfully",
 		"sessionId": request.SessionID,
 		"status":    "completed",
+	})
+}
+
+// BootstrapClusterPool bootstraps all 3 baseline clusters
+func (ac *AdminController) BootstrapClusterPool(c *gin.Context) {
+	ac.logger.Info("Admin request to bootstrap cluster pool")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Minute)
+	defer cancel()
+
+	err := ac.sessionManager.BootstrapClusterPool(ctx)
+	if err != nil {
+		ac.logger.WithError(err).Error("Failed to bootstrap cluster pool")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Failed to bootstrap cluster pool",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	ac.logger.Info("Cluster pool bootstrap completed successfully")
+	c.JSON(http.StatusOK, gin.H{
+		"message":  "Cluster pool bootstrapped successfully",
+		"clusters": []string{"cluster1", "cluster2", "cluster3"},
+		"status":   "completed",
 	})
 }

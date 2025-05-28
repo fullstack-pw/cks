@@ -18,8 +18,10 @@ type Session struct {
 	ControlPlaneVM   string                  `json:"controlPlaneVM"`
 	WorkerNodeVM     string                  `json:"workerNodeVM"`
 	Tasks            []TaskStatus            `json:"tasks"`
-	TerminalSessions map[string]string       `json:"terminalSessions"` // Keep existing
-	ActiveTerminals  map[string]TerminalInfo `json:"activeTerminals"`  // NEW: Persistent terminal info
+	TerminalSessions map[string]string       `json:"terminalSessions"`          // Keep existing
+	ActiveTerminals  map[string]TerminalInfo `json:"activeTerminals"`           // NEW: Persistent terminal info
+	AssignedCluster  string                  `json:"assignedCluster,omitempty"` // "cluster1", "cluster2", "cluster3"
+	ClusterLockTime  time.Time               `json:"clusterLockTime,omitempty"`
 }
 
 type TerminalInfo struct {
@@ -237,4 +239,39 @@ type SnapshotInfo struct {
 	K8sVersion   string    `json:"k8sVersion"`
 	Status       string    `json:"status"`
 	Ready        bool      `json:"ready"`
+}
+
+// ClusterPool represents a managed cluster in the pool
+type ClusterPool struct {
+	ClusterID       string        `json:"clusterId"` // "cluster1", "cluster2", "cluster3"
+	Namespace       string        `json:"namespace"` // matches clusterID
+	Status          ClusterStatus `json:"status"`
+	AssignedSession string        `json:"assignedSession,omitempty"`
+	LockTime        time.Time     `json:"lockTime,omitempty"`
+	LastReset       time.Time     `json:"lastReset"`
+	ControlPlaneVM  string        `json:"controlPlaneVM"` // e.g., "cks-control-plane-cluster1"
+	WorkerNodeVM    string        `json:"workerNodeVM"`   // e.g., "cks-worker-node-cluster1"
+	CreatedAt       time.Time     `json:"createdAt"`
+	LastHealthCheck time.Time     `json:"lastHealthCheck"`
+}
+
+// ClusterStatus represents the state of a cluster in the pool
+type ClusterStatus string
+
+const (
+	StatusAvailable ClusterStatus = "available" // Ready for assignment
+	StatusLocked    ClusterStatus = "locked"    // Currently assigned to session
+	StatusResetting ClusterStatus = "resetting" // Being restored from snapshot
+	StatusError     ClusterStatus = "error"     // Needs manual intervention
+	StatusCreating  ClusterStatus = "creating"  // Initial bootstrap in progress
+)
+
+// ClusterPoolStats provides pool-wide statistics
+type ClusterPoolStats struct {
+	TotalClusters     int                      `json:"totalClusters"`
+	AvailableClusters int                      `json:"availableClusters"`
+	LockedClusters    int                      `json:"lockedClusters"`
+	ResettingClusters int                      `json:"resettingClusters"`
+	ErrorClusters     int                      `json:"errorClusters"`
+	StatusByCluster   map[string]ClusterStatus `json:"statusByCluster"`
 }

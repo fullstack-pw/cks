@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sirupsen/logrus"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/fullstack-pw/cks/backend/internal/config"
@@ -575,6 +574,19 @@ func (sm *SessionManager) provisionEnvironment(ctx context.Context, session *mod
 func (sm *SessionManager) createNamespace(ctx context.Context, namespace string) error {
 	sm.logger.WithField("namespace", namespace).Info("Creating namespace")
 
+	// Check if namespace already exists
+	_, err := sm.clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err == nil {
+		// Namespace already exists, that's fine
+		sm.logger.WithField("namespace", namespace).Info("Namespace already exists, continuing")
+		return nil
+	}
+
+	// If error is NOT "not found", return the error
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to check existing namespace: %w", err)
+	}
+
 	// Create namespace with labels
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
@@ -585,66 +597,61 @@ func (sm *SessionManager) createNamespace(ctx context.Context, namespace string)
 		},
 	}
 
-	_, err := sm.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
-	return err
+	_, err = sm.clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
+	if err != nil {
+		// Double-check if it's an "already exists" error
+		if errors.IsAlreadyExists(err) {
+			sm.logger.WithField("namespace", namespace).Info("Namespace created by another process, continuing")
+			return nil
+		}
+		return fmt.Errorf("failed to create namespace: %w", err)
+	}
+
+	sm.logger.WithField("namespace", namespace).Info("Namespace created successfully")
+	return nil
 }
 
 func (sm *SessionManager) setupResourceQuotas(ctx context.Context, namespace string) error {
 	sm.logger.WithField("namespace", namespace).Info("Setting up resource quotas")
 
-	// Create a resource quota with limits
+	// Create a resource quota with HIGHER limits for cluster pool
 	quota := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "session-quota",
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("4"),
-				corev1.ResourceMemory: resource.MustParse("8Gi"),
-				corev1.ResourcePods:   resource.MustParse("10"),
+				corev1.ResourceCPU:    resource.MustParse("8"),    // Increased from 4
+				corev1.ResourceMemory: resource.MustParse("16Gi"), // Increased from 8Gi
+				corev1.ResourcePods:   resource.MustParse("20"),   // Increased from 10
 			},
 		},
 	}
 
-	// Implement retry with backoff
-	backoff := wait.Backoff{
-		Steps:    5,
-		Duration: 1 * time.Second,
-		Factor:   2.0,
-		Jitter:   0.1,
+	// Check if quota already exists
+	existingQuota, err := sm.clientset.CoreV1().ResourceQuotas(namespace).Get(ctx, "session-quota", metav1.GetOptions{})
+	if err == nil {
+		// Update existing quota
+		existingQuota.Spec = quota.Spec
+		_, err = sm.clientset.CoreV1().ResourceQuotas(namespace).Update(ctx, existingQuota, metav1.UpdateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to update resource quota: %w", err)
+		}
+		sm.logger.WithField("namespace", namespace).Info("Resource quota updated")
+		return nil
 	}
 
-	var lastErr error
-	err := wait.ExponentialBackoff(backoff, func() (bool, error) {
-		_, err := sm.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
-		if err == nil {
-			return true, nil // Success
+	// Create new quota if it doesn't exist
+	if errors.IsNotFound(err) {
+		_, err = sm.clientset.CoreV1().ResourceQuotas(namespace).Create(ctx, quota, metav1.CreateOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to create resource quota: %w", err)
 		}
-
-		if errors.IsAlreadyExists(err) {
-			sm.logger.WithField("namespace", namespace).Warn("Resource quota already exists")
-			return true, nil // Already exists, consider success
-		}
-
-		// Check for namespace not found
-		if errors.IsNotFound(err) {
-			sm.logger.WithField("namespace", namespace).Error("Namespace not found while creating resource quota")
-			// This is a terminal error, no need to retry
-			return false, err
-		}
-
-		// Record the error and retry
-		lastErr = err
-		sm.logger.WithError(err).WithField("namespace", namespace).Warn("Failed to create resource quota, retrying...")
-		return false, nil // Retry
-	})
-
-	if err == wait.ErrWaitTimeout {
-		return fmt.Errorf("failed to create resource quota after retries: %v", lastErr)
+		sm.logger.WithField("namespace", namespace).Info("Resource quota created")
+		return nil
 	}
 
-	sm.logger.WithField("namespace", namespace).Info("Resource quota created successfully")
-	return err
+	return fmt.Errorf("failed to check existing quota: %w", err)
 }
 
 // loadScenario loads a scenario by ID
@@ -1321,6 +1328,85 @@ func (sm *SessionManager) createVMSnapshotCrossNamespace(ctx context.Context, so
 
 	// Clean up temporary snapshot
 	sm.kubevirtClient.DeleteVMSnapshot(ctx, sourceNamespace, tempSnapshotName)
+
+	return nil
+}
+
+// BootstrapClusterPool creates 3 baseline clusters in static namespaces
+func (sm *SessionManager) BootstrapClusterPool(ctx context.Context) error {
+	clusterIDs := []string{"cluster1", "cluster2", "cluster3"}
+
+	sm.logger.Info("Starting cluster pool bootstrap")
+
+	// Bootstrap clusters SEQUENTIALLY to avoid resource conflicts
+	for _, clusterID := range clusterIDs {
+		sm.logger.WithField("clusterID", clusterID).Info("Starting bootstrap for cluster")
+
+		err := sm.bootstrapClusterInNamespace(ctx, clusterID)
+		if err != nil {
+			return fmt.Errorf("failed to bootstrap cluster %s: %w", clusterID, err)
+		}
+
+		sm.logger.WithField("clusterID", clusterID).Info("Cluster bootstrap completed")
+
+		// Add delay between cluster bootstraps to avoid resource conflicts
+		time.Sleep(30 * time.Second)
+	}
+
+	sm.logger.Info("All clusters bootstrapped successfully")
+	return nil
+}
+
+// bootstrapClusterInNamespace bootstraps one cluster using existing proven logic
+func (sm *SessionManager) bootstrapClusterInNamespace(ctx context.Context, clusterID string) error {
+	namespace := clusterID // namespace matches clusterID
+
+	sm.logger.WithField("clusterID", clusterID).Info("Bootstrapping cluster")
+
+	// Use EXISTING VM naming pattern to avoid breaking join command logic
+	// Just replace the session part with cluster ID
+	controlPlaneVM := fmt.Sprintf("cks-control-plane-%s", clusterID)
+	workerNodeVM := fmt.Sprintf("cks-worker-node-%s", clusterID)
+
+	// Create session object to use with existing provisionFromBootstrap
+	session := &models.Session{
+		ID:             clusterID, // Use clusterID as session ID
+		Namespace:      namespace, // Use static cluster namespace
+		Status:         models.SessionStatusProvisioning,
+		ControlPlaneVM: controlPlaneVM, // Keep existing naming pattern
+		WorkerNodeVM:   workerNodeVM,   // Keep existing naming pattern
+		StartTime:      time.Now(),
+		ExpirationTime: time.Now().Add(240 * time.Hour), // Long expiration for pool clusters
+	}
+
+	// Clean up existing resources if they exist
+	err := sm.cleanupExistingCluster(ctx, session)
+	if err != nil {
+		sm.logger.WithError(err).WithField("clusterID", clusterID).Warn("Failed to cleanup existing cluster, continuing...")
+	}
+
+	// Use existing proven provisionFromBootstrap method
+	err = sm.provisionFromBootstrap(ctx, session)
+	if err != nil {
+		return fmt.Errorf("failed to bootstrap cluster %s: %w", clusterID, err)
+	}
+
+	sm.logger.WithField("clusterID", clusterID).Info("Cluster bootstrap completed")
+	return nil
+}
+
+// cleanupExistingCluster removes existing VMs and resources before bootstrap
+func (sm *SessionManager) cleanupExistingCluster(ctx context.Context, session *models.Session) error {
+	sm.logger.WithField("namespace", session.Namespace).Info("Cleaning up existing cluster resources")
+
+	// Delete existing VMs if they exist
+	err := sm.kubevirtClient.DeleteVMs(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	if err != nil {
+		sm.logger.WithError(err).Warn("Failed to delete existing VMs")
+	}
+
+	// Wait a bit for cleanup to complete
+	time.Sleep(10 * time.Second)
 
 	return nil
 }
