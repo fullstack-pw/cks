@@ -1030,3 +1030,108 @@ func (c *Client) waitForVMStopped(ctx context.Context, namespace, vmName string)
 		return false, nil
 	})
 }
+
+// RestoreVMFromSnapshot restores a VM from its snapshot
+func (c *Client) RestoreVMFromSnapshot(ctx context.Context, namespace, vmName, snapshotName string) error {
+	logrus.WithFields(logrus.Fields{
+		"namespace":    namespace,
+		"vmName":       vmName,
+		"snapshotName": snapshotName,
+	}).Info("Starting VM restore from snapshot")
+
+	// Step 1: Stop the VM
+	err := c.StopVMs(ctx, namespace, vmName)
+	if err != nil {
+		return fmt.Errorf("failed to stop VM %s: %w", vmName, err)
+	}
+
+	// Step 2: Delete current VM
+	err = c.virtClient.VirtualMachine(namespace).Delete(ctx, vmName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete VM %s: %w", vmName, err)
+	}
+
+	// Step 3: Delete current DataVolume
+	dvName := fmt.Sprintf("%s-rootdisk", vmName)
+	err = c.virtClient.CdiClient().CdiV1beta1().DataVolumes(namespace).Delete(ctx, dvName, metav1.DeleteOptions{})
+	if err != nil && !k8serrors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete DataVolume %s: %w", dvName, err)
+	}
+
+	// Wait a bit for cleanup to complete
+	time.Sleep(10 * time.Second)
+
+	// Step 4: Create VirtualMachineRestore from snapshot
+	restore := &snapshotv1beta1.VirtualMachineRestore{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-restore-%d", vmName, time.Now().Unix()),
+			Namespace: namespace,
+		},
+		Spec: snapshotv1beta1.VirtualMachineRestoreSpec{
+			Target: corev1.TypedLocalObjectReference{
+				APIGroup: &[]string{"kubevirt.io"}[0],
+				Kind:     "VirtualMachine",
+				Name:     vmName,
+			},
+			VirtualMachineSnapshotName: snapshotName,
+		},
+	}
+
+	_, err = c.virtClient.VirtualMachineRestore(namespace).Create(ctx, restore, metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create VM restore: %w", err)
+	}
+
+	// Step 5: Wait for restore to complete
+	err = c.waitForRestoreComplete(ctx, namespace, restore.Name)
+	if err != nil {
+		return fmt.Errorf("restore failed to complete: %w", err)
+	}
+
+	// Step 6: Start the restored VM
+	err = c.StartVM(ctx, namespace, vmName)
+	if err != nil {
+		return fmt.Errorf("failed to start restored VM: %w", err)
+	}
+
+	// Step 7: Wait for VM to be ready
+	err = c.WaitForVMReady(ctx, namespace, vmName)
+	if err != nil {
+		return fmt.Errorf("restored VM failed to become ready: %w", err)
+	}
+
+	logrus.WithFields(logrus.Fields{
+		"vmName":       vmName,
+		"snapshotName": snapshotName,
+	}).Info("VM restore completed successfully")
+
+	return nil
+}
+
+// waitForRestoreComplete waits for a VirtualMachineRestore to complete
+func (c *Client) waitForRestoreComplete(ctx context.Context, namespace, restoreName string) error {
+	logrus.WithField("restoreName", restoreName).Info("Waiting for restore to complete")
+
+	return wait.PollUntilContextCancel(ctx, 10*time.Second, true, func(context.Context) (bool, error) {
+		restore, err := c.virtClient.VirtualMachineRestore(namespace).Get(ctx, restoreName, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+
+		if restore.Status != nil && restore.Status.Complete != nil && *restore.Status.Complete {
+			logrus.WithField("restoreName", restoreName).Info("Restore completed successfully")
+			return true, nil
+		}
+
+		// Check for failure
+		if restore.Status != nil && len(restore.Status.Conditions) > 0 {
+			for _, condition := range restore.Status.Conditions {
+				if condition.Type == "Failure" && condition.Status == corev1.ConditionTrue {
+					return false, fmt.Errorf("restore failed: %s", condition.Message)
+				}
+			}
+		}
+
+		return false, nil
+	})
+}

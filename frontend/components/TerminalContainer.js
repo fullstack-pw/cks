@@ -133,11 +133,9 @@ const TerminalContainer = ({ sessionId }) => {
         };
     }, []);
 
-    // Poll for session status changes and initialize terminals
+    // Update the session status polling effect
     useEffect(() => {
         if (!sessionId) return;
-
-        let timeoutId = null;
 
         const checkSessionStatus = async () => {
             if (!isMounted.current) return;
@@ -147,6 +145,7 @@ const TerminalContainer = ({ sessionId }) => {
 
                 if (!isMounted.current) return;
 
+                // Sessions from cluster pool are immediately running
                 if (session.status === 'running') {
                     setSessionStatus({
                         isReady: true,
@@ -164,23 +163,20 @@ const TerminalContainer = ({ sessionId }) => {
                         !terminalSessions['control-plane'].isLoading) {
                         createOrGetTerminalSession('control-plane');
                     }
-                } else if (session.status === 'provisioning' || session.status === 'pending') {
-                    setSessionStatus(prev => ({
-                        ...prev,
-                        isLoading: true,
-                        message: `Session ${session.status}...`,
-                        error: null
-                    }));
-
-                    if (isMounted.current) {
-                        timeoutId = setTimeout(checkSessionStatus, 15000);
-                    }
-                } else {
+                } else if (session.status === 'failed') {
                     setSessionStatus({
                         isReady: false,
                         isLoading: false,
-                        message: `Session ${session.status}`,
-                        error: session.statusMessage || null
+                        message: `Session failed: ${session.statusMessage || 'Unknown error'}`,
+                        error: session.statusMessage || 'Session failed'
+                    });
+                } else {
+                    // Handle unexpected status - shouldn't happen with cluster pool
+                    setSessionStatus({
+                        isReady: false,
+                        isLoading: false,
+                        message: `Unexpected session status: ${session.status}`,
+                        error: null
                     });
                 }
             } catch (error) {
@@ -195,13 +191,12 @@ const TerminalContainer = ({ sessionId }) => {
             }
         };
 
+        // Check immediately, no polling needed for cluster pool sessions
         checkSessionStatus();
 
         // Cleanup function
         const cleanup = () => {
-            if (timeoutId) {
-                clearTimeout(timeoutId);
-            }
+            // No polling to cleanup
         };
 
         cleanupFunctions.current.push(cleanup);

@@ -123,7 +123,7 @@ export const SessionProvider = ({ children }) => {
             const result = await api.sessions.create(scenarioId);
             // Prefetch the session data for SWR
             mutate(`/sessions/${result.sessionId}`, result, false);
-            toast.success('Lab session created successfully');
+            toast.success('Lab session created and ready!'); // Updated message
             router.push(`/lab/${result.sessionId}`);
             return result;
         } catch (err) {

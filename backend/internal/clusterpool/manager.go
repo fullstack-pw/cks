@@ -2,6 +2,7 @@
 package clusterpool
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -204,14 +205,43 @@ func (m *Manager) MarkClusterAvailable(clusterID string) error {
 	return nil
 }
 
-// resetClusterAsync performs cluster reset in background
+// resetClusterAsync performs cluster reset in background using snapshots
 func (m *Manager) resetClusterAsync(clusterID string) {
-	m.logger.WithField("clusterID", clusterID).Info("Starting cluster reset")
+	m.logger.WithField("clusterID", clusterID).Info("Starting real cluster reset from snapshots")
 
-	// TODO: Implement snapshot-based reset in Phase 2
-	// For now, just mark as available after a delay to simulate reset
-	time.Sleep(10 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
 
+	m.lock.RLock()
+	cluster, exists := m.clusters[clusterID]
+	m.lock.RUnlock()
+
+	if !exists {
+		m.logger.WithField("clusterID", clusterID).Error("Cluster not found for reset")
+		return
+	}
+
+	// Generate snapshot names (matching the pattern from snapshot creation)
+	cpSnapshotName := fmt.Sprintf("cp-%s-snapshot", clusterID)
+	wkSnapshotName := fmt.Sprintf("wk-%s-snapshot", clusterID)
+
+	// Restore control plane VM from snapshot
+	err := m.kubevirtClient.RestoreVMFromSnapshot(ctx, cluster.Namespace, cluster.ControlPlaneVM, cpSnapshotName)
+	if err != nil {
+		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to restore control plane VM")
+		m.markClusterError(clusterID, err)
+		return
+	}
+
+	// Restore worker VM from snapshot
+	err = m.kubevirtClient.RestoreVMFromSnapshot(ctx, cluster.Namespace, cluster.WorkerNodeVM, wkSnapshotName)
+	if err != nil {
+		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to restore worker VM")
+		m.markClusterError(clusterID, err)
+		return
+	}
+
+	// Mark cluster as available
 	m.lock.Lock()
 	if cluster, exists := m.clusters[clusterID]; exists {
 		cluster.Status = models.StatusAvailable
@@ -219,7 +249,18 @@ func (m *Manager) resetClusterAsync(clusterID string) {
 	}
 	m.lock.Unlock()
 
-	m.logger.WithField("clusterID", clusterID).Info("Cluster reset completed")
+	m.logger.WithField("clusterID", clusterID).Info("Cluster reset completed successfully")
+}
+
+// markClusterError marks a cluster as in error state
+func (m *Manager) markClusterError(clusterID string, err error) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if cluster, exists := m.clusters[clusterID]; exists {
+		cluster.Status = models.StatusError
+		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Cluster marked as error")
+	}
 }
 
 // maintenanceLoop performs periodic maintenance tasks
