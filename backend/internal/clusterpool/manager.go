@@ -11,11 +11,17 @@ import (
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/sirupsen/logrus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 const (
 	PoolSize = 3 // cluster1, cluster2, cluster3
+
+	// Kubernetes annotations for persistent cluster state
+	ClusterStatusAnnotation    = "cks.io/cluster-status"
+	ClusterLastResetAnnotation = "cks.io/last-reset"
+	ClusterCreatedAtAnnotation = "cks.io/created-at"
 )
 
 // Manager manages the cluster pool for session assignment
@@ -56,25 +62,29 @@ func NewManager(
 	return manager, nil
 }
 
-// initializePool sets up the initial cluster pool state with static VM names
+// initializePool reads cluster status from namespace annotations for persistence across restarts
 func (m *Manager) initializePool() {
-	m.logger.Info("Initializing cluster pool with static VM names...")
+	m.logger.Info("Initializing cluster pool from namespace annotations...")
 
 	clusterIDs := []string{"cluster1", "cluster2", "cluster3"}
 
 	for _, clusterID := range clusterIDs {
+		// Read persistent status from namespace annotation
+		status := m.getClusterStatusFromNamespace(clusterID)
+		lastReset := m.getLastResetFromNamespace(clusterID)
+
 		// Use consistent naming pattern for VMs
 		controlPlaneVM := fmt.Sprintf("cp-%s", clusterID)
 		workerVM := fmt.Sprintf("wk-%s", clusterID)
 
 		cluster := &models.ClusterPool{
 			ClusterID:       clusterID,
-			Namespace:       clusterID,             // namespace matches cluster ID
-			Status:          models.StatusCreating, // Will be updated after bootstrap
+			Namespace:       clusterID, // namespace matches cluster ID
+			Status:          status,    // Read from namespace annotation
 			ControlPlaneVM:  controlPlaneVM,
 			WorkerNodeVM:    workerVM,
-			CreatedAt:       time.Now(),
-			LastReset:       time.Now(),
+			CreatedAt:       time.Now(), // Could also be persisted if needed
+			LastReset:       lastReset,  // Read from namespace annotation
 			LastHealthCheck: time.Now(),
 		}
 
@@ -86,10 +96,11 @@ func (m *Manager) initializePool() {
 			"controlPlaneVM": cluster.ControlPlaneVM,
 			"workerVM":       cluster.WorkerNodeVM,
 			"status":         cluster.Status,
-		}).Info("Cluster added to pool")
+			"lastReset":      cluster.LastReset,
+		}).Info("Cluster initialized from persistent state")
 	}
 
-	m.logger.WithField("poolSize", len(m.clusters)).Info("Cluster pool initialized")
+	m.logger.WithField("poolSize", len(m.clusters)).Info("Cluster pool initialized from namespace annotations")
 }
 
 // AssignCluster assigns an available cluster to a session
@@ -201,13 +212,29 @@ func (m *Manager) MarkClusterAvailable(clusterID string) error {
 	}
 
 	cluster.Status = models.StatusAvailable
-	m.logger.WithField("clusterID", clusterID).Info("Cluster marked as available")
+
+	// Persist to namespace annotation
+	err := m.updateClusterStatusInNamespace(clusterID, models.StatusAvailable)
+	if err != nil {
+		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to persist cluster status to namespace")
+		// Continue anyway - in-memory state is updated
+	}
+
+	m.logger.WithField("clusterID", clusterID).Info("Cluster marked as available and persisted")
 	return nil
 }
 
 // resetClusterAsync performs cluster reset in background using snapshots
 func (m *Manager) resetClusterAsync(clusterID string) {
 	m.logger.WithField("clusterID", clusterID).Info("Starting real cluster reset from snapshots")
+
+	// Mark as resetting and persist
+	m.lock.Lock()
+	if cluster, exists := m.clusters[clusterID]; exists {
+		cluster.Status = models.StatusResetting
+		m.updateClusterStatusInNamespace(clusterID, models.StatusResetting)
+	}
+	m.lock.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
@@ -241,11 +268,12 @@ func (m *Manager) resetClusterAsync(clusterID string) {
 		return
 	}
 
-	// Mark cluster as available
+	// Mark cluster as available and persist
 	m.lock.Lock()
 	if cluster, exists := m.clusters[clusterID]; exists {
 		cluster.Status = models.StatusAvailable
 		cluster.LastReset = time.Now()
+		m.updateClusterStatusInNamespace(clusterID, models.StatusAvailable)
 	}
 	m.lock.Unlock()
 
@@ -259,7 +287,14 @@ func (m *Manager) markClusterError(clusterID string, err error) {
 
 	if cluster, exists := m.clusters[clusterID]; exists {
 		cluster.Status = models.StatusError
-		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Cluster marked as error")
+
+		// Persist error state
+		persistErr := m.updateClusterStatusInNamespace(clusterID, models.StatusError)
+		if persistErr != nil {
+			m.logger.WithError(persistErr).Error("Failed to persist error status")
+		}
+
+		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Cluster marked as error and persisted")
 	}
 }
 
@@ -301,4 +336,81 @@ func (m *Manager) performMaintenance() {
 func (m *Manager) Stop() {
 	close(m.stopCh)
 	m.logger.Info("Cluster pool manager stopped")
+}
+
+// getClusterStatusFromNamespace reads status from namespace annotation
+func (m *Manager) getClusterStatusFromNamespace(clusterID string) models.ClusterStatus {
+	ctx := context.Background()
+
+	ns, err := m.kubeClient.CoreV1().Namespaces().Get(ctx, clusterID, metav1.GetOptions{})
+	if err != nil {
+		m.logger.WithError(err).WithField("clusterID", clusterID).Warn("Failed to get namespace, defaulting to creating")
+		return models.StatusCreating
+	}
+
+	if ns.Annotations == nil {
+		return models.StatusCreating
+	}
+
+	statusStr, exists := ns.Annotations[ClusterStatusAnnotation]
+	if !exists {
+		return models.StatusCreating
+	}
+
+	return models.ClusterStatus(statusStr)
+}
+
+// getLastResetFromNamespace reads last reset time from namespace annotation
+func (m *Manager) getLastResetFromNamespace(clusterID string) time.Time {
+	ctx := context.Background()
+
+	ns, err := m.kubeClient.CoreV1().Namespaces().Get(ctx, clusterID, metav1.GetOptions{})
+	if err != nil {
+		return time.Now()
+	}
+
+	if ns.Annotations == nil {
+		return time.Now()
+	}
+
+	resetTimeStr, exists := ns.Annotations[ClusterLastResetAnnotation]
+	if !exists {
+		return time.Now()
+	}
+
+	resetTime, err := time.Parse(time.RFC3339, resetTimeStr)
+	if err != nil {
+		return time.Now()
+	}
+
+	return resetTime
+}
+
+// updateClusterStatusInNamespace persists status to namespace annotation
+func (m *Manager) updateClusterStatusInNamespace(clusterID string, status models.ClusterStatus) error {
+	ctx := context.Background()
+
+	ns, err := m.kubeClient.CoreV1().Namespaces().Get(ctx, clusterID, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get namespace %s: %w", clusterID, err)
+	}
+
+	if ns.Annotations == nil {
+		ns.Annotations = make(map[string]string)
+	}
+
+	ns.Annotations[ClusterStatusAnnotation] = string(status)
+	ns.Annotations[ClusterLastResetAnnotation] = time.Now().Format(time.RFC3339)
+
+	_, err = m.kubeClient.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to update namespace %s: %w", clusterID, err)
+	}
+
+	m.logger.WithFields(logrus.Fields{
+		"clusterID": clusterID,
+		"status":    status,
+	}).Debug("Updated cluster status in namespace annotation")
+
+	return nil
 }

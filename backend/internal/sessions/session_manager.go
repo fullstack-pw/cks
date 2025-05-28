@@ -44,7 +44,7 @@ func NewSessionManager(
 	validationEngine *validation.Engine,
 	logger *logrus.Logger,
 	scenarioManager *scenarios.ScenarioManager,
-	clusterPool *clusterpool.Manager, // Add this parameter
+	clusterPool *clusterpool.Manager,
 ) (*SessionManager, error) {
 	sm := &SessionManager{
 		sessions:         make(map[string]*models.Session),
@@ -57,6 +57,9 @@ func NewSessionManager(
 		scenarioManager:  scenarioManager,
 		clusterPool:      clusterPool, // Add this line
 	}
+
+	// Clean stale terminals after backend restart
+	sm.cleanStaleTerminals()
 
 	// Start session cleanup goroutine
 	go sm.cleanupExpiredSessions()
@@ -1089,4 +1092,21 @@ func (sm *SessionManager) provisionFromBootstrapForClusterPool(ctx context.Conte
 
 	sm.logger.WithField("clusterID", session.ID).Info("Cluster pool bootstrap completed successfully")
 	return nil
+}
+
+// cleanStaleTerminals removes terminal sessions that don't exist in TerminalManager
+func (sm *SessionManager) cleanStaleTerminals() {
+	sm.lock.Lock()
+	defer sm.lock.Unlock()
+
+	for sessionID, session := range sm.sessions {
+		if session.ActiveTerminals != nil && len(session.ActiveTerminals) > 0 {
+			// Clear all terminal sessions on backend restart
+			// Frontend will create new ones as needed
+			session.ActiveTerminals = make(map[string]models.TerminalInfo)
+			session.TerminalSessions = make(map[string]string)
+
+			sm.logger.WithField("sessionID", sessionID).Info("Cleared stale terminal sessions")
+		}
+	}
 }
