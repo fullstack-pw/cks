@@ -13,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/fullstack-pw/cks/backend/internal/clusterpool"
 	"github.com/fullstack-pw/cks/backend/internal/config"
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
 	"github.com/fullstack-pw/cks/backend/internal/models"
@@ -33,6 +34,7 @@ type SessionManager struct {
 	logger           *logrus.Logger
 	stopCh           chan struct{}
 	scenarioManager  *scenarios.ScenarioManager
+	clusterPool      *clusterpool.Manager
 }
 
 func NewSessionManager(
@@ -41,7 +43,8 @@ func NewSessionManager(
 	kubevirtClient *kubevirt.Client,
 	validationEngine *validation.Engine,
 	logger *logrus.Logger,
-	scenarioManager *scenarios.ScenarioManager, // Add this parameter
+	scenarioManager *scenarios.ScenarioManager,
+	clusterPool *clusterpool.Manager, // Add this parameter
 ) (*SessionManager, error) {
 	sm := &SessionManager{
 		sessions:         make(map[string]*models.Session),
@@ -51,7 +54,8 @@ func NewSessionManager(
 		validationEngine: validationEngine,
 		logger:           logger,
 		stopCh:           make(chan struct{}),
-		scenarioManager:  scenarioManager, // Add this
+		scenarioManager:  scenarioManager,
+		clusterPool:      clusterPool, // Add this line
 	}
 
 	// Start session cleanup goroutine
@@ -60,7 +64,7 @@ func NewSessionManager(
 	return sm, nil
 }
 
-// Update the task initialization section in CreateSession
+// CreateSession creates a new session using cluster pool assignment
 func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) (*models.Session, error) {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
@@ -72,7 +76,18 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 
 	// Generate session ID
 	sessionID := uuid.New().String()[:8]
-	namespace := fmt.Sprintf("user-session-%s", sessionID)
+
+	// Assign cluster from pool
+	assignedCluster, err := sm.clusterPool.AssignCluster(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to assign cluster: %w", err)
+	}
+
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"clusterID": assignedCluster.ClusterID,
+		"namespace": assignedCluster.Namespace,
+	}).Info("Cluster assigned to session")
 
 	// Initialize variables
 	var tasks []models.TaskStatus
@@ -82,6 +97,8 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 	if scenarioID != "" {
 		scenario, err := sm.loadScenario(ctx, scenarioID)
 		if err != nil {
+			// Release cluster on error
+			sm.clusterPool.ReleaseCluster(sessionID)
 			return nil, fmt.Errorf("failed to load scenario: %w", err)
 		}
 
@@ -95,33 +112,7 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 				ID:     task.ID,
 				Status: "pending",
 			})
-
-			// Add detailed logging for each task
-			sm.logger.WithFields(logrus.Fields{
-				"sessionID":       sessionID,
-				"taskID":          task.ID,
-				"taskTitle":       task.Title,
-				"validationCount": len(task.Validation),
-			}).Debug("Initialized task with validation rules")
 		}
-
-		sm.logger.WithFields(logrus.Fields{
-			"sessionID":     sessionID,
-			"scenarioID":    scenarioID,
-			"scenarioTitle": scenarioTitle,
-			"taskCount":     len(tasks),
-			"tasksDetailed": func() []map[string]interface{} {
-				details := make([]map[string]interface{}, len(scenario.Tasks))
-				for i, t := range scenario.Tasks {
-					details[i] = map[string]interface{}{
-						"id":              t.ID,
-						"title":           t.Title,
-						"validationCount": len(t.Validation),
-					}
-				}
-				return details
-			}(),
-		}).Info("Initialized session with scenario tasks")
 
 		sm.logger.WithFields(logrus.Fields{
 			"sessionID":     sessionID,
@@ -131,45 +122,48 @@ func (sm *SessionManager) CreateSession(ctx context.Context, scenarioID string) 
 		}).Info("Initialized session with scenario tasks")
 	}
 
-	// Create session object
+	// Create session object using assigned cluster
 	session := &models.Session{
 		ID:               sessionID,
-		Namespace:        namespace,
+		Namespace:        assignedCluster.Namespace, // Use cluster namespace
 		ScenarioID:       scenarioID,
-		Status:           models.SessionStatusPending,
+		Status:           models.SessionStatusRunning, // Immediate running status
 		StartTime:        time.Now(),
 		ExpirationTime:   time.Now().Add(time.Duration(sm.config.SessionTimeoutMinutes) * time.Minute),
-		ControlPlaneVM:   fmt.Sprintf("cks-control-plane-user-session-%s", sessionID),
-		WorkerNodeVM:     fmt.Sprintf("cks-worker-node-user-session-%s", sessionID),
+		ControlPlaneVM:   assignedCluster.ControlPlaneVM, // Use cluster VMs
+		WorkerNodeVM:     assignedCluster.WorkerNodeVM,   // Use cluster VMs
 		Tasks:            tasks,
 		TerminalSessions: make(map[string]string),
+		ActiveTerminals:  make(map[string]models.TerminalInfo),
+		AssignedCluster:  assignedCluster.ClusterID, // Track assigned cluster
+		ClusterLockTime:  assignedCluster.LockTime,  // Track lock time
 	}
 
 	// Store session
 	sm.sessions[sessionID] = session
 
 	sm.logger.WithFields(logrus.Fields{
-		"sessionID":     sessionID,
-		"namespace":     namespace,
-		"scenarioID":    scenarioID,
-		"scenarioTitle": scenarioTitle,
-	}).Info("Creating new session")
+		"sessionID":      sessionID,
+		"clusterID":      assignedCluster.ClusterID,
+		"namespace":      session.Namespace,
+		"scenarioID":     scenarioID,
+		"scenarioTitle":  scenarioTitle,
+		"controlPlaneVM": session.ControlPlaneVM,
+		"workerNodeVM":   session.WorkerNodeVM,
+	}).Info("Session created with assigned cluster - ready immediately")
 
-	// Create namespace asynchronously with a new background context
-	go func() {
-		provisionCtx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		defer cancel()
+	// Initialize scenario in background if needed
+	if scenarioID != "" {
+		go func() {
+			initCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
 
-		err := sm.provisionEnvironment(provisionCtx, session)
-		if err != nil {
-			sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Failed to provision environment")
-			sm.lock.Lock()
-			session.Status = models.SessionStatusFailed
-			session.StatusMessage = fmt.Sprintf("Failed to provision environment: %v", err)
-			sm.lock.Unlock()
-			return
-		}
-	}()
+			err := sm.initializeScenario(initCtx, session)
+			if err != nil {
+				sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Failed to initialize scenario (session still usable)")
+			}
+		}()
+	}
 
 	return session, nil
 }
@@ -200,7 +194,7 @@ func (sm *SessionManager) ListSessions() []*models.Session {
 	return sessions
 }
 
-// DeleteSession deletes a session and cleans up its resources
+// DeleteSession deletes a session and releases its cluster
 func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) error {
 	sm.lock.Lock()
 	session, ok := sm.sessions[sessionID]
@@ -208,23 +202,26 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 		sm.lock.Unlock()
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
+
+	// Remove from session map immediately
+	delete(sm.sessions, sessionID)
 	sm.lock.Unlock()
 
-	sm.logger.WithField("sessionID", sessionID).Info("Deleting session")
+	sm.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"clusterID": session.AssignedCluster,
+	}).Info("Deleting session and releasing cluster")
 
-	// Clean up resources asynchronously
-	go func() {
-		err := sm.cleanupEnvironment(ctx, session)
+	// Release cluster back to pool
+	if session.AssignedCluster != "" {
+		err := sm.clusterPool.ReleaseCluster(sessionID)
 		if err != nil {
-			// Log error but continue with deletion
-			sm.logger.WithError(err).WithField("sessionID", sessionID).Error("Error cleaning up session")
+			sm.logger.WithError(err).WithFields(logrus.Fields{
+				"sessionID": sessionID,
+				"clusterID": session.AssignedCluster,
+			}).Error("Failed to release cluster")
 		}
-
-		// Remove from session map
-		sm.lock.Lock()
-		delete(sm.sessions, sessionID)
-		sm.lock.Unlock()
-	}()
+	}
 
 	return nil
 }
@@ -1364,7 +1361,6 @@ func (sm *SessionManager) bootstrapClusterInNamespace(ctx context.Context, clust
 	sm.logger.WithField("clusterID", clusterID).Info("Bootstrapping cluster")
 
 	// Use EXISTING VM naming pattern to avoid breaking join command logic
-	// Just replace the session part with cluster ID
 	controlPlaneVM := fmt.Sprintf("cks-control-plane-%s", clusterID)
 	workerNodeVM := fmt.Sprintf("cks-worker-node-%s", clusterID)
 
@@ -1385,8 +1381,8 @@ func (sm *SessionManager) bootstrapClusterInNamespace(ctx context.Context, clust
 		sm.logger.WithError(err).WithField("clusterID", clusterID).Warn("Failed to cleanup existing cluster, continuing...")
 	}
 
-	// Use existing proven provisionFromBootstrap method
-	err = sm.provisionFromBootstrap(ctx, session)
+	// Use existing proven provisionFromBootstrap method with bootstrap flag
+	err = sm.provisionFromBootstrapForClusterPool(ctx, session)
 	if err != nil {
 		return fmt.Errorf("failed to bootstrap cluster %s: %w", clusterID, err)
 	}
@@ -1408,5 +1404,64 @@ func (sm *SessionManager) cleanupExistingCluster(ctx context.Context, session *m
 	// Wait a bit for cleanup to complete
 	time.Sleep(10 * time.Second)
 
+	return nil
+}
+
+// provisionFromBootstrapForClusterPool provisions a cluster for the pool (no session status updates)
+func (sm *SessionManager) provisionFromBootstrapForClusterPool(ctx context.Context, session *models.Session) error {
+	sm.logger.WithField("clusterID", session.ID).Info("Provisioning cluster for pool using bootstrap method")
+
+	// Verify KubeVirt is available
+	err := sm.kubevirtClient.VerifyKubeVirtAvailable(ctx)
+	if err != nil {
+		sm.logger.WithError(err).Error("Failed to verify KubeVirt availability")
+		return fmt.Errorf("failed to verify KubeVirt availability: %w", err)
+	}
+
+	// Create namespace
+	namespaceCtx, cancelNamespace := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelNamespace()
+	err = sm.createNamespace(namespaceCtx, session.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to create namespace: %w", err)
+	}
+
+	// Add a short delay to ensure the namespace is fully created
+	time.Sleep(2 * time.Second)
+
+	// Set up resource quotas
+	quotaCtx, cancelQuota := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancelQuota()
+	sm.logger.WithField("namespace", session.Namespace).Info("Setting up resource quotas")
+	err = sm.setupResourceQuotas(quotaCtx, session.Namespace)
+	if err != nil {
+		return fmt.Errorf("failed to set up resource quotas: %w", err)
+	}
+
+	// Add a short delay to ensure resource quotas are applied
+	time.Sleep(2 * time.Second)
+
+	// Create KubeVirt VMs
+	vmCtx, cancelVM := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancelVM()
+	sm.logger.WithField("clusterID", session.ID).Info("Creating KubeVirt VMs")
+	err = sm.kubevirtClient.CreateCluster(vmCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	if err != nil {
+		return fmt.Errorf("failed to create VMs: %w", err)
+	}
+
+	// Wait for VMs to be ready
+	waitCtx, cancelWait := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancelWait()
+	sm.logger.WithField("clusterID", session.ID).Info("Waiting for VMs to be ready")
+	err = sm.kubevirtClient.WaitForVMsReady(waitCtx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
+	if err != nil {
+		return fmt.Errorf("failed waiting for VMs: %w", err)
+	}
+
+	// NO scenario initialization needed for cluster pool
+	// NO session status updates needed for cluster pool
+
+	sm.logger.WithField("clusterID", session.ID).Info("Cluster pool bootstrap completed successfully")
 	return nil
 }

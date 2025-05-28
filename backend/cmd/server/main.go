@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/fullstack-pw/cks/backend/internal/clusterpool"
 	"github.com/fullstack-pw/cks/backend/internal/config"
 	"github.com/fullstack-pw/cks/backend/internal/controllers"
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
@@ -114,11 +115,18 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create scenario manager")
 	}
 
-	// Update session manager creation
-	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, validationEngine, logger, scenarioManager)
+	// Create cluster pool manager
+	clusterPoolManager, err := clusterpool.NewManager(cfg, kubeClient, kubevirtClient, logger)
+	if err != nil {
+		logger.WithError(err).Fatal("Failed to create cluster pool manager")
+	}
+
+	// Update session manager creation with cluster pool
+	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, validationEngine, logger, scenarioManager, clusterPoolManager)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create session manager")
 	}
+
 	// Create service layer implementations
 	sessionService := services.NewSessionService(sessionManager)
 	terminalService := services.NewTerminalService(terminalManager)
@@ -167,6 +175,9 @@ func main() {
 	// Create context with timeout for shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// Stop cluster pool manager
+	clusterPoolManager.Stop()
 
 	// Shutdown server
 	if err := server.Shutdown(ctx); err != nil {

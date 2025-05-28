@@ -545,59 +545,41 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 	logrus.WithField("actualVMName", actualVMName).Info("Adjusted VM name for join command")
 
 	// Wait for the VM to be fully ready with kubelet initialized
-	// This might take longer than just the VM being "ready"
-	time.Sleep(30 * time.Second)
+	time.Sleep(60 * time.Second)
 
-	// Wait for kubeadm init to complete and join command to be available
-	var joinCommand string
-	err := wait.PollImmediate(15*time.Second, 15*time.Minute, func() (bool, error) {
-		// Execute command using virtctl
-		cmd := exec.Command(
-			"virtctl", "ssh",
-			fmt.Sprintf("vmi/%s", actualVMName),
-			"-n", namespace,
-			"-l", "suporte",
-			"--local-ssh-opts", "-o StrictHostKeyChecking=no",
-			"--command=cat /etc/kubeadm-join-command",
-		)
+	// Simple direct attempt without polling first
+	logrus.Info("Attempting direct join command retrieval...")
 
-		logrus.WithField("command", cmd.String()).Debug("Executing virtctl command")
+	cmd := exec.Command(
+		"virtctl", "ssh",
+		fmt.Sprintf("vmi/%s", actualVMName),
+		"-n", namespace,
+		"-l", "suporte",
+		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
+		"--command=cat /etc/kubeadm-join-command",
+	)
 
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
+	logrus.WithField("command", cmd.String()).Debug("Executing virtctl command")
 
-		err := cmd.Run()
-		if err != nil {
-			logrus.WithError(err).WithField("stderr", stderr.String()).Debug("Failed to execute virtctl, retrying...")
-			return false, nil // Keep trying
-		}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
-		if stderr.Len() > 0 {
-			logrus.WithField("stderr", stderr.String()).Debug("Command returned error, retrying...")
-			return false, nil
-		}
-
-		// Got join command
-		output := stdout.String()
-		joinCommand = strings.TrimSpace(output)
-		if joinCommand != "" {
-			// Replace IP addresses with hostname
-			re := regexp.MustCompile(`\b(?:\d{1,3}\.){3}\d{1,3}\b`)
-			joinCommand = re.ReplaceAllString(joinCommand, actualVMName)
-
-			logrus.WithField("joinCommand", joinCommand).Info("Successfully retrieved join command")
-			return true, nil
-		}
-
-		logrus.Debug("Join command not available yet, retrying...")
-		return false, nil
-	})
-
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("failed to get join command: %v", err)
+		logrus.WithError(err).WithField("stderr", stderr.String()).Error("Direct join command attempt failed")
+		return "", fmt.Errorf("failed to execute join command: %v", err)
 	}
 
+	output := stdout.String()
+	joinCommand := strings.TrimSpace(output)
+
+	if joinCommand == "" {
+		logrus.Error("Join command is empty")
+		return "", fmt.Errorf("join command is empty")
+	}
+
+	logrus.WithField("joinCommand", joinCommand).Info("Successfully retrieved join command")
 	return joinCommand, nil
 }
 

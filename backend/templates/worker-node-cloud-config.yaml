@@ -32,4 +32,3 @@ runcmd:
   # Change default shell for suporte user
   - usermod -s /bin/bash suporte
   - echo 'alias k=kubectl' >> /home/suporte/.bashrc
-  - source /home/suporte/.bashrc
