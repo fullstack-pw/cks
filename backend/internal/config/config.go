@@ -16,6 +16,7 @@ type Config struct {
 	Environment     string
 	LogLevel        string
 	CorsAllowOrigin string
+	LogFormat       string
 
 	// Session settings
 	SessionTimeoutMinutes  int
@@ -48,6 +49,7 @@ func LoadConfig() (*Config, error) {
 		Environment:     getEnv("ENVIRONMENT", "development"),
 		LogLevel:        getEnv("LOG_LEVEL", "info"),
 		CorsAllowOrigin: getEnv("CORS_ALLOW_ORIGIN", "*"),
+		LogFormat:       getEnv("LOG_FORMAT", "text"),
 
 		// Session defaults
 		SessionTimeoutMinutes:  getEnvAsInt("SESSION_TIMEOUT_MINUTES", 60),

@@ -14,11 +14,13 @@ import (
 
 type Engine struct {
 	kubevirtClient *kubevirt.Client
+	logger         *logrus.Logger
 }
 
-func NewEngine(kubevirtClient *kubevirt.Client) *Engine {
+func NewEngine(kubevirtClient *kubevirt.Client, logger *logrus.Logger) *Engine {
 	return &Engine{
 		kubevirtClient: kubevirtClient,
+		logger:         logger,
 	}
 }
 
@@ -29,7 +31,7 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 		Details: []models.ValidationDetail{},
 	}
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"taskID":          task.ID,
 		"validationRules": len(task.Validation),
 	}).Info("Starting task validation")
@@ -49,7 +51,7 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 	}
 
 	// Log the complete validation result
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"taskID":  task.ID,
 		"success": result.Success,
 		"message": result.Message,
@@ -58,7 +60,7 @@ func (e *Engine) ValidateTask(ctx context.Context, session *models.Session, task
 
 	// Log each detail
 	for i, detail := range result.Details {
-		logrus.WithFields(logrus.Fields{
+		e.logger.WithFields(logrus.Fields{
 			"index":   i,
 			"rule":    detail.Rule,
 			"passed":  detail.Passed,
@@ -81,7 +83,7 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 	var err error
 
 	// Add logging to track rule execution
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"ruleID":      rule.ID,
 		"ruleType":    rule.Type,
 		"description": rule.Description,
@@ -114,7 +116,7 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 	}
 
 	// Log the complete validation detail
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"ruleID":      rule.ID,
 		"passed":      detail.Passed,
 		"message":     detail.Message,
@@ -128,7 +130,7 @@ func (e *Engine) validateRule(ctx context.Context, session *models.Session, rule
 }
 
 func (e *Engine) validateResourceExists(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"ruleID":  rule.ID,
 		"session": session.ID,
 		"rule":    fmt.Sprintf("%+v", rule),
@@ -141,7 +143,7 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 
 	if rule.Resource == nil {
 		detail.Message = "Invalid resource specification"
-		logrus.WithField("ruleID", rule.ID).Debug("Resource is nil")
+		e.logger.WithField("ruleID", rule.ID).Debug("Resource is nil")
 		return detail, nil
 	}
 
@@ -156,7 +158,7 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 		rule.Resource.Name,
 		namespace)
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"command":   cmd,
 		"namespace": session.Namespace,
 		"targetVM":  session.ControlPlaneVM,
@@ -164,14 +166,14 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 
 	output, err := e.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, session.ControlPlaneVM, cmd)
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"output": output,
 		"error":  err,
 	}).Debug("Command execution result")
 
 	if err != nil || strings.Contains(output, "NotFound") || strings.Contains(output, "Error") {
 		detail.Message = rule.ErrorMessage
-		logrus.WithFields(logrus.Fields{
+		e.logger.WithFields(logrus.Fields{
 			"ruleID":  rule.ID,
 			"message": detail.Message,
 		}).Debug("Resource check failed")
@@ -182,7 +184,7 @@ func (e *Engine) validateResourceExists(ctx context.Context, session *models.Ses
 	detail.Message = fmt.Sprintf("%s '%s' exists in namespace '%s'",
 		rule.Resource.Kind, rule.Resource.Name, namespace)
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"ruleID":  rule.ID,
 		"passed":  detail.Passed,
 		"message": detail.Message,
@@ -341,7 +343,7 @@ func (e *Engine) validateScript(ctx context.Context, session *models.Session, ru
 }
 
 func (e *Engine) validateCommand(ctx context.Context, session *models.Session, rule models.ValidationRule) (models.ValidationDetail, error) {
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"ruleID":  rule.ID,
 		"command": rule.Command,
 	}).Debug("Starting validateCommand")
@@ -355,7 +357,7 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 
 	if rule.Command == nil {
 		detail.Message = "Invalid command specification"
-		logrus.WithField("ruleID", rule.ID).Debug("Command is nil")
+		e.logger.WithField("ruleID", rule.ID).Debug("Command is nil")
 		return detail, nil
 	}
 
@@ -367,7 +369,7 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 
 	detail.Description = fmt.Sprintf("Executing command on %s", rule.Command.Target)
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"target":    target,
 		"command":   rule.Command.Command,
 		"sessionNS": session.Namespace,
@@ -379,7 +381,7 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 	// Store the actual output
 	detail.Actual = strings.TrimSpace(output)
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"output": output,
 		"error":  err,
 		"ruleID": rule.ID,
@@ -403,7 +405,7 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 		detail.Expected = expectedOutput
 		detail.Actual = actualOutput
 
-		logrus.WithFields(logrus.Fields{
+		e.logger.WithFields(logrus.Fields{
 			"expected": expectedOutput,
 			"actual":   actualOutput,
 		}).Debug("Comparing output")
@@ -436,7 +438,7 @@ func (e *Engine) validateCommand(ctx context.Context, session *models.Session, r
 		detail.Message = fmt.Sprintf("Unknown condition: %s", rule.Condition)
 	}
 
-	logrus.WithFields(logrus.Fields{
+	e.logger.WithFields(logrus.Fields{
 		"ruleID":  rule.ID,
 		"passed":  detail.Passed,
 		"message": detail.Message,

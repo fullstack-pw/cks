@@ -32,21 +32,33 @@ import (
 )
 
 func main() {
-	// Set up logger
 	logger := logrus.New()
-	logger.SetFormatter(&logrus.JSONFormatter{})
-
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to load configuration")
 	}
 
+	// Configure formatter based on config
+	switch cfg.LogFormat {
+	case "json":
+		logger.SetFormatter(&logrus.JSONFormatter{})
+	case "text":
+		logger.SetFormatter(&logrus.TextFormatter{
+			FullTimestamp: true,
+			DisableColors: false, // Enable colors for development
+		})
+	default:
+		logger.SetFormatter(&logrus.TextFormatter{
+			FullTimestamp: true,
+			DisableColors: false,
+		})
+	}
+
 	// Set log level based on configuration
 	logLevel, err := logrus.ParseLevel(cfg.LogLevel)
 	if err != nil {
 		logger.WithError(err).Warn("Invalid log level, using info")
-		logLevel = logrus.DebugLevel
 	}
 	logger.SetLevel(logLevel)
 
@@ -98,13 +110,13 @@ func main() {
 	}
 
 	// Create KubeVirt client
-	kubevirtClient, err := kubevirt.NewClient(k8sConfig)
+	kubevirtClient, err := kubevirt.NewClient(k8sConfig, logger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create kubevirt client")
 	}
 
 	// Create validation engine
-	validationEngine := validation.NewEngine(kubevirtClient)
+	validationEngine := validation.NewEngine(kubevirtClient, logger)
 
 	// Create terminal manager
 	terminalManager := terminal.NewManager(kubeClient, kubevirtClient, k8sConfig, logger)

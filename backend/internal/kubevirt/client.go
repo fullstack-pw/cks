@@ -34,8 +34,9 @@ type Client struct {
 	kubeClient    kubernetes.Interface
 	virtClient    kubecli.KubevirtClient
 	config        *config.Config
-	restConfig    *rest.Config // Store the REST config
+	restConfig    *rest.Config
 	templateCache map[string]*template.Template
+	logger        *logrus.Logger
 }
 
 // Retry configuration constants
@@ -71,7 +72,7 @@ func (c *Client) retryOperation(ctx context.Context, operationName string, opera
 	for attempt := 0; attempt <= config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			delay := time.Duration(float64(config.Delay) * math.Pow(config.Backoff, float64(attempt-1)))
-			logrus.WithFields(logrus.Fields{
+			c.logger.WithFields(logrus.Fields{
 				"operation": operationName,
 				"attempt":   attempt,
 				"delay":     delay,
@@ -88,7 +89,7 @@ func (c *Client) retryOperation(ctx context.Context, operationName string, opera
 		err := operation()
 		if err == nil {
 			if attempt > 0 {
-				logrus.WithFields(logrus.Fields{
+				c.logger.WithFields(logrus.Fields{
 					"operation": operationName,
 					"attempt":   attempt,
 				}).Info("Operation succeeded after retry")
@@ -97,7 +98,7 @@ func (c *Client) retryOperation(ctx context.Context, operationName string, opera
 		}
 
 		lastErr = err
-		logrus.WithError(err).WithFields(logrus.Fields{
+		c.logger.WithError(err).WithFields(logrus.Fields{
 			"operation": operationName,
 			"attempt":   attempt,
 		}).Warn("Operation failed")
@@ -112,7 +113,7 @@ func (c *Client) retryOperation(ctx context.Context, operationName string, opera
 }
 
 // NewClient creates a new KubeVirt client
-func NewClient(restConfig *rest.Config) (*Client, error) {
+func NewClient(restConfig *rest.Config, logger *logrus.Logger) (*Client, error) {
 	// Create kubernetes client
 	kubeClient, err := kubernetes.NewForConfig(restConfig)
 	if err != nil {
@@ -147,8 +148,9 @@ func NewClient(restConfig *rest.Config) (*Client, error) {
 		kubeClient:    kubeClient,
 		virtClient:    virtClient,
 		config:        cfg,
-		restConfig:    restConfig, // Store the REST config
+		restConfig:    restConfig,
 		templateCache: templateCache,
+		logger:        logger,
 	}, nil
 }
 
@@ -158,7 +160,7 @@ func (c *Client) validateGoldenImage(ctx context.Context) error {
 		return nil // Skip validation if disabled
 	}
 
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"imageName":      c.config.GoldenImageName,
 		"imageNamespace": c.config.GoldenImageNamespace,
 	}).Info("Validating golden image exists")
@@ -177,7 +179,7 @@ func (c *Client) validateGoldenImage(ctx context.Context) error {
 			err)
 	}
 
-	logrus.WithField("imageName", c.config.GoldenImageName).Info("Golden image validation successful")
+	c.logger.WithField("imageName", c.config.GoldenImageName).Info("Golden image validation successful")
 	return nil
 }
 
@@ -188,7 +190,7 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 		return fmt.Errorf("golden image validation failed: %w", err)
 	}
 
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"controlPlane": controlPlaneName,
 		"workerNode":   workerNodeName,
@@ -201,7 +203,7 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 	if err != nil {
 		return fmt.Errorf("failed to create control plane cloud-init secret: %w", err)
 	}
-	logrus.Info("Control plane cloud-init secret created successfully")
+	c.logger.Info("Control plane cloud-init secret created successfully")
 
 	// Step 2: Create control plane VM with retry
 	err = c.retryOperation(ctx, "create-control-plane-vm", func() error {
@@ -210,7 +212,7 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 	if err != nil {
 		return fmt.Errorf("failed to create control plane VM: %w", err)
 	}
-	logrus.Info("Control plane VM created successfully")
+	c.logger.Info("Control plane VM created successfully")
 
 	// Step 3: Wait for control plane to be ready with timeout
 	controlPlaneCtx, cancelCP := context.WithTimeout(ctx, VMReadyTimeout)
@@ -221,11 +223,11 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 		// Try to cleanup on failure
 		cleanupErr := c.cleanupFailedVM(ctx, namespace, controlPlaneName)
 		if cleanupErr != nil {
-			logrus.WithError(cleanupErr).Error("Failed to cleanup control plane VM after creation failure")
+			c.logger.WithError(cleanupErr).Error("Failed to cleanup control plane VM after creation failure")
 		}
 		return fmt.Errorf("control plane VM failed to become ready: %w", err)
 	}
-	logrus.Info("Control plane VM is ready")
+	c.logger.Info("Control plane VM is ready")
 
 	// Step 4: Get join command with retry
 	var joinCommand string
@@ -260,7 +262,7 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 		return fmt.Errorf("failed to create worker node VM: %w", err)
 	}
 
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"controlPlane": controlPlaneName,
 		"workerNode":   workerNodeName,
@@ -271,7 +273,7 @@ func (c *Client) CreateCluster(ctx context.Context, namespace, controlPlaneName,
 
 // cleanupFailedVM cleans up a failed VM and its resources
 func (c *Client) cleanupFailedVM(ctx context.Context, namespace, vmName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"vmName":    vmName,
 	}).Info("Cleaning up failed VM")
@@ -305,7 +307,7 @@ func (c *Client) cleanupFailedVM(ctx context.Context, namespace, vmName string) 
 		return fmt.Errorf("cleanup errors: %s", strings.Join(errorMsgs, "; "))
 	}
 
-	logrus.WithField("vmName", vmName).Info("VM cleanup completed successfully")
+	c.logger.WithField("vmName", vmName).Info("VM cleanup completed successfully")
 	return nil
 }
 
@@ -409,14 +411,14 @@ func (c *Client) createVM(ctx context.Context, namespace, vmName, vmType string)
 
 	// Substitute variables in the VM template
 	renderedVM := substituteEnvVars(string(templateContent), data)
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"vmName":    vmName,
 		"vmType":    vmType,
 		"namespace": namespace,
 	}).Debug("Rendered VM YAML content:")
-	logrus.Debug("=== RENDERED VM YAML START ===")
-	logrus.Debug(renderedVM)
-	logrus.Debug("=== RENDERED VM YAML END ===")
+	c.logger.Debug("=== RENDERED VM YAML START ===")
+	c.logger.Debug(renderedVM)
+	c.logger.Debug("=== RENDERED VM YAML END ===")
 	// Apply VM using kubectl
 	return applyYAML(ctx, renderedVM)
 }
@@ -432,7 +434,7 @@ func (c *Client) WaitForVMsReady(ctx context.Context, namespace string, vmNames 
 }
 
 func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"vmName":    vmName,
 	}).Info("Waiting for VM to become ready")
@@ -444,19 +446,19 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
 				elapsed := time.Since(startTime)
-				logrus.WithFields(logrus.Fields{
+				c.logger.WithFields(logrus.Fields{
 					"vmName":  vmName,
 					"elapsed": elapsed,
 				}).Debug("VM not found yet, continuing to wait...")
 				return false, nil
 			}
 			// Log error but continue trying
-			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VM status, retrying...")
+			c.logger.WithError(err).WithField("vmName", vmName).Warn("Error checking VM status, retrying...")
 			return false, nil
 		}
 
 		// Log detailed VM status for debugging
-		logrus.WithFields(logrus.Fields{
+		c.logger.WithFields(logrus.Fields{
 			"vmName":  vmName,
 			"running": vm.Spec.Running,
 			"created": vm.Status.Created,
@@ -468,15 +470,15 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 		vmi, err := c.virtClient.VirtualMachineInstance(namespace).Get(ctx, vmName, metav1.GetOptions{})
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				logrus.WithField("vmName", vmName).Debug("VMI not found yet, VM not fully created")
+				c.logger.WithField("vmName", vmName).Debug("VMI not found yet, VM not fully created")
 				return false, nil
 			}
-			logrus.WithError(err).WithField("vmName", vmName).Warn("Error checking VMI status")
+			c.logger.WithError(err).WithField("vmName", vmName).Warn("Error checking VMI status")
 			return false, nil
 		}
 
 		// Log VMI phase for debugging
-		logrus.WithFields(logrus.Fields{
+		c.logger.WithFields(logrus.Fields{
 			"vmName":  vmName,
 			"phase":   vmi.Status.Phase,
 			"elapsed": time.Since(startTime),
@@ -485,7 +487,7 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 		// Check if VMI is in Running phase AND VM is marked as ready
 		if vmi.Status.Phase == "Running" && vm.Status.Ready {
 			elapsed := time.Since(startTime)
-			logrus.WithFields(logrus.Fields{
+			c.logger.WithFields(logrus.Fields{
 				"vmName":  vmName,
 				"elapsed": elapsed,
 			}).Info("VM is ready and running")
@@ -499,7 +501,7 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 					if transition.Phase == "Running" {
 						runningDuration := time.Since(transition.PhaseTransitionTimestamp.Time)
 						if runningDuration > 60*time.Second {
-							logrus.WithFields(logrus.Fields{
+							c.logger.WithFields(logrus.Fields{
 								"vmName":     vmName,
 								"runningFor": runningDuration,
 							}).Info("VM has been running for 60+ seconds, considering it ready")
@@ -517,7 +519,7 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 
 		// Continue waiting
 		elapsed := time.Since(startTime)
-		logrus.WithFields(logrus.Fields{
+		c.logger.WithFields(logrus.Fields{
 			"vmName":   vmName,
 			"vmiPhase": vmi.Status.Phase,
 			"vmReady":  vm.Status.Ready,
@@ -528,34 +530,34 @@ func (c *Client) WaitForVMReady(ctx context.Context, namespace, vmName string) e
 }
 
 func (c *Client) VerifyKubeVirtAvailable(ctx context.Context) error {
-	logrus.Info("Verifying KubeVirt availability")
+	c.logger.Info("Verifying KubeVirt availability")
 
 	// Try to list VMs in the default namespace as a check
 	_, err := c.virtClient.VirtualMachine("default").List(ctx, metav1.ListOptions{})
 	if err != nil {
-		logrus.WithError(err).Error("Failed to access KubeVirt API")
+		c.logger.WithError(err).Error("Failed to access KubeVirt API")
 		return fmt.Errorf("failed to access KubeVirt API: %w", err)
 	}
 
-	logrus.Info("KubeVirt API is accessible")
+	c.logger.Info("KubeVirt API is accessible")
 	return nil
 }
 
 func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName string) (string, error) {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":        namespace,
 		"controlPlaneName": controlPlaneName,
 	}).Info("Getting join command from control plane")
 
 	// Adjust the VM name to match the actual name pattern
 	actualVMName := fmt.Sprintf("cp-%s", namespace)
-	logrus.WithField("actualVMName", actualVMName).Info("Adjusted VM name for join command")
+	c.logger.WithField("actualVMName", actualVMName).Info("Adjusted VM name for join command")
 
 	// Wait for the VM to be fully ready with kubelet initialized
 	time.Sleep(60 * time.Second)
 
 	// Simple direct attempt without polling first
-	logrus.Info("Attempting direct join command retrieval...")
+	c.logger.Info("Attempting direct join command retrieval...")
 
 	cmd := exec.Command(
 		"virtctl", "ssh",
@@ -566,7 +568,7 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 		"--command=cat /etc/kubeadm-join-command",
 	)
 
-	logrus.WithField("command", cmd.String()).Debug("Executing virtctl command")
+	c.logger.WithField("command", cmd.String()).Debug("Executing virtctl command")
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -574,7 +576,7 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 
 	err := cmd.Run()
 	if err != nil {
-		logrus.WithError(err).WithField("stderr", stderr.String()).Error("Direct join command attempt failed")
+		c.logger.WithError(err).WithField("stderr", stderr.String()).Error("Direct join command attempt failed")
 		return "", fmt.Errorf("failed to execute join command: %v", err)
 	}
 
@@ -582,11 +584,11 @@ func (c *Client) getJoinCommand(ctx context.Context, namespace, controlPlaneName
 	joinCommand := strings.TrimSpace(output)
 
 	if joinCommand == "" {
-		logrus.Error("Join command is empty")
+		c.logger.Error("Join command is empty")
 		return "", fmt.Errorf("join command is empty")
 	}
 
-	logrus.WithField("joinCommand", joinCommand).Info("Successfully retrieved join command")
+	c.logger.WithField("joinCommand", joinCommand).Info("Successfully retrieved join command")
 	return joinCommand, nil
 }
 
@@ -649,7 +651,7 @@ func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...str
 }
 
 func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string) (string, error) {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"vmName":    vmName,
 		"namespace": namespace,
 		"command":   command,
@@ -665,7 +667,7 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 		actualVMName = fmt.Sprintf("%s-%s", vmName, namespace)
 	}
 
-	logrus.WithField("actualVMName", actualVMName).Debug("Adjusted VM name for command execution")
+	c.logger.WithField("actualVMName", actualVMName).Debug("Adjusted VM name for command execution")
 
 	// Create the virtctl ssh command with proper arguments
 	args := []string{
@@ -677,7 +679,7 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 		"--command=" + command,
 	}
 
-	logrus.WithField("virtctlArgs", args).Debug("Virtctl command arguments")
+	c.logger.WithField("virtctlArgs", args).Debug("Virtctl command arguments")
 
 	cmd := exec.CommandContext(ctx, "virtctl", args...)
 
@@ -689,14 +691,14 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 	// Execute the command
 	if err := cmd.Run(); err != nil {
 		// Read error output
-		logrus.WithError(err).WithFields(logrus.Fields{
+		c.logger.WithError(err).WithFields(logrus.Fields{
 			"stderr": stderr.String(),
 			"stdout": stdout.String(),
 		}).Debug("Command execution failed")
 		return "", fmt.Errorf("command execution failed: %w, output: %s", err, stderr.String())
 	}
 
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"stdout": stdout.String(),
 		"vmName": actualVMName,
 	}).Debug("Command executed successfully")
@@ -825,7 +827,7 @@ func (c *Client) GetVMStatus(ctx context.Context, namespace, vmName string) (str
 
 // CreateVMSnapshot creates a snapshot of a virtual machine
 func (c *Client) CreateVMSnapshot(ctx context.Context, namespace, vmName, snapshotName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"vmName":       vmName,
 		"snapshotName": snapshotName,
@@ -859,13 +861,13 @@ func (c *Client) CreateVMSnapshot(ctx context.Context, namespace, vmName, snapsh
 		return fmt.Errorf("failed to create snapshot %s: %w", snapshotName, err)
 	}
 
-	logrus.WithField("snapshotName", snapshotName).Info("VM snapshot creation initiated")
+	c.logger.WithField("snapshotName", snapshotName).Info("VM snapshot creation initiated")
 	return nil
 }
 
 // WaitForSnapshotReady waits for a snapshot to be ready to use
 func (c *Client) WaitForSnapshotReady(ctx context.Context, namespace, snapshotName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"snapshotName": snapshotName,
 	}).Info("Waiting for snapshot to be ready")
@@ -875,15 +877,15 @@ func (c *Client) WaitForSnapshotReady(ctx context.Context, namespace, snapshotNa
 		snapshot, err := c.virtClient.VirtualMachineSnapshot(namespace).Get(ctx, snapshotName, metav1.GetOptions{})
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				logrus.WithField("snapshotName", snapshotName).Debug("Snapshot not found yet")
+				c.logger.WithField("snapshotName", snapshotName).Debug("Snapshot not found yet")
 				return false, nil
 			}
-			logrus.WithError(err).WithField("snapshotName", snapshotName).Warn("Error checking snapshot status")
+			c.logger.WithError(err).WithField("snapshotName", snapshotName).Warn("Error checking snapshot status")
 			return false, nil
 		}
 
 		elapsed := time.Since(startTime)
-		logrus.WithFields(logrus.Fields{
+		c.logger.WithFields(logrus.Fields{
 			"snapshotName": snapshotName,
 			"elapsed":      elapsed,
 			"phase": func() string {
@@ -901,7 +903,7 @@ func (c *Client) WaitForSnapshotReady(ctx context.Context, namespace, snapshotNa
 		}).Debug("Snapshot status check")
 
 		if snapshot.Status != nil && snapshot.Status.ReadyToUse != nil && *snapshot.Status.ReadyToUse {
-			logrus.WithFields(logrus.Fields{
+			c.logger.WithFields(logrus.Fields{
 				"snapshotName": snapshotName,
 				"elapsed":      elapsed,
 			}).Info("Snapshot is ready")
@@ -929,7 +931,7 @@ func (c *Client) CheckSnapshotExists(ctx context.Context, namespace, snapshotNam
 
 // DeleteVMSnapshot deletes a VM snapshot
 func (c *Client) DeleteVMSnapshot(ctx context.Context, namespace, snapshotName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"snapshotName": snapshotName,
 	}).Info("Deleting VM snapshot")
@@ -939,13 +941,13 @@ func (c *Client) DeleteVMSnapshot(ctx context.Context, namespace, snapshotName s
 		return fmt.Errorf("failed to delete snapshot %s: %w", snapshotName, err)
 	}
 
-	logrus.WithField("snapshotName", snapshotName).Info("VM snapshot deleted")
+	c.logger.WithField("snapshotName", snapshotName).Info("VM snapshot deleted")
 	return nil
 }
 
 // StartVM starts a virtual machine
 func (c *Client) StartVM(ctx context.Context, namespace, vmName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"vmName":    vmName,
 	}).Info("Starting VM")
@@ -962,7 +964,7 @@ func (c *Client) StartVM(ctx context.Context, namespace, vmName string) error {
 		return fmt.Errorf("failed to start VM %s: %w", vmName, err)
 	}
 
-	logrus.WithField("vmName", vmName).Info("VM start initiated")
+	c.logger.WithField("vmName", vmName).Info("VM start initiated")
 	return nil
 }
 
@@ -973,7 +975,7 @@ func (c *Client) VirtClient() kubecli.KubevirtClient {
 
 // StopVMs stops multiple VMs for consistent snapshot creation
 func (c *Client) StopVMs(ctx context.Context, namespace string, vmNames ...string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace": namespace,
 		"vmNames":   vmNames,
 	}).Info("Freezing VMs for snapshot")
@@ -1010,7 +1012,7 @@ func (c *Client) StopVMs(ctx context.Context, namespace string, vmNames ...strin
 		}
 	}
 
-	logrus.WithField("vmNames", vmNames).Info("All VMs stopped successfully")
+	c.logger.WithField("vmNames", vmNames).Info("All VMs stopped successfully")
 	return nil
 }
 
@@ -1033,7 +1035,7 @@ func (c *Client) waitForVMStopped(ctx context.Context, namespace, vmName string)
 
 // RestoreVMFromSnapshot restores a VM from its snapshot
 func (c *Client) RestoreVMFromSnapshot(ctx context.Context, namespace, vmName, snapshotName string) error {
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"namespace":    namespace,
 		"vmName":       vmName,
 		"snapshotName": snapshotName,
@@ -1100,7 +1102,7 @@ func (c *Client) RestoreVMFromSnapshot(ctx context.Context, namespace, vmName, s
 		return fmt.Errorf("restored VM failed to become ready: %w", err)
 	}
 
-	logrus.WithFields(logrus.Fields{
+	c.logger.WithFields(logrus.Fields{
 		"vmName":       vmName,
 		"snapshotName": snapshotName,
 	}).Info("VM restore completed successfully")
@@ -1110,7 +1112,7 @@ func (c *Client) RestoreVMFromSnapshot(ctx context.Context, namespace, vmName, s
 
 // waitForRestoreComplete waits for a VirtualMachineRestore to complete
 func (c *Client) waitForRestoreComplete(ctx context.Context, namespace, restoreName string) error {
-	logrus.WithField("restoreName", restoreName).Info("Waiting for restore to complete")
+	c.logger.WithField("restoreName", restoreName).Info("Waiting for restore to complete")
 
 	return wait.PollUntilContextCancel(ctx, 10*time.Second, true, func(context.Context) (bool, error) {
 		restore, err := c.virtClient.VirtualMachineRestore(namespace).Get(ctx, restoreName, metav1.GetOptions{})
@@ -1119,7 +1121,7 @@ func (c *Client) waitForRestoreComplete(ctx context.Context, namespace, restoreN
 		}
 
 		if restore.Status != nil && restore.Status.Complete != nil && *restore.Status.Complete {
-			logrus.WithField("restoreName", restoreName).Info("Restore completed successfully")
+			c.logger.WithField("restoreName", restoreName).Info("Restore completed successfully")
 			return true, nil
 		}
 
