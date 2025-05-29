@@ -256,7 +256,9 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	}
 
 	// Only handle control-plane with persistent connections for now
-	if !strings.Contains(session.Target, "control-plane") {
+	// Check if this is a control-plane VM (either contains "control-plane" or starts with "cp-")
+	isControlPlane := strings.Contains(session.Target, "control-plane") || strings.HasPrefix(session.Target, "cp-")
+	if !isControlPlane {
 		tm.logger.WithField("target", session.Target).Info("Using legacy connection for non-control-plane target")
 		tm.handleLegacyTerminalConnection(w, r, session)
 		return
@@ -305,7 +307,7 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	}).Info("Handling persistent terminal connection")
 
 	// Get or create persistent SSH connection
-	sshConn, err := tm.GetOrCreatePersistentSSH(session.SessionID, session.Namespace, "control-plane")
+	sshConn, err := tm.GetOrCreatePersistentSSH(session.SessionID, session.Namespace, session.Target)
 	if err != nil {
 		tm.logger.WithError(err).Error("Failed to get persistent SSH connection")
 		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create persistent terminal: %v", err)))
@@ -573,7 +575,9 @@ func (tm *Manager) CleanupSessionSSH(sessionID string) {
 // GetOrCreatePersistentSSH gets existing or creates new persistent SSH connection
 func (tm *Manager) GetOrCreatePersistentSSH(sessionID, namespace, target string) (*PersistentSSHConnection, error) {
 	// Only handle control-plane for now
-	if target != "control-plane" {
+	// Accept both "control-plane" and actual VM names starting with "cp-"
+	isControlPlane := target == "control-plane" || strings.HasPrefix(target, "cp-")
+	if !isControlPlane {
 		return nil, fmt.Errorf("persistent SSH only supported for control-plane currently")
 	}
 
