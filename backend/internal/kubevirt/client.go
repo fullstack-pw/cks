@@ -1047,19 +1047,6 @@ func (c *Client) RestoreVMFromSnapshot(ctx context.Context, namespace, vmName, s
 		return fmt.Errorf("failed to stop VM %s: %w", vmName, err)
 	}
 
-	// Step 2: Delete current VM
-	err = c.virtClient.VirtualMachine(namespace).Delete(ctx, vmName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete VM %s: %w", vmName, err)
-	}
-
-	// Step 3: Delete current DataVolume
-	dvName := fmt.Sprintf("%s-rootdisk", vmName)
-	err = c.virtClient.CdiClient().CdiV1beta1().DataVolumes(namespace).Delete(ctx, dvName, metav1.DeleteOptions{})
-	if err != nil && !k8serrors.IsNotFound(err) {
-		return fmt.Errorf("failed to delete DataVolume %s: %w", dvName, err)
-	}
-
 	// Wait a bit for cleanup to complete
 	time.Sleep(10 * time.Second)
 
