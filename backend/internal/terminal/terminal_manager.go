@@ -84,8 +84,14 @@ func (tm *Manager) CreateSession(sessionID, namespace, target string) (string, e
 	defer tm.lock.Unlock()
 
 	// Generate deterministic terminal ID based on session and target
-	terminalID := fmt.Sprintf("%s-%s", sessionID, target)
-
+	// Normalize target names to be consistent
+	normalizedTarget := target
+	if strings.HasPrefix(target, "cp-") {
+		normalizedTarget = "control-plane"
+	} else if strings.HasPrefix(target, "wk-") {
+		normalizedTarget = "worker-node"
+	}
+	terminalID := fmt.Sprintf("%s-%s", sessionID, normalizedTarget)
 	// Check if terminal session already exists
 	if existingSession, exists := tm.sessions[terminalID]; exists {
 		// Update last used time
@@ -194,7 +200,7 @@ func (tm *Manager) GetSession(terminalID string) (*Session, error) {
 	return session, nil
 }
 
-// Add helper method to validate terminal ID format
+// isValidTerminalID validates terminal ID format
 func (tm *Manager) isValidTerminalID(terminalID string) bool {
 	// Must match pattern: 8chars-target where target is "control-plane" or "worker-node"
 	pattern := `^[a-f0-9]{8}-(control-plane|worker-node)$`
@@ -252,15 +258,6 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	if err != nil {
 		tm.logger.WithError(err).WithField("terminalID", terminalID).Error("Terminal session not found")
 		http.Error(w, "Terminal session not found", http.StatusNotFound)
-		return
-	}
-
-	// Only handle control-plane with persistent connections for now
-	// Check if this is a control-plane VM (either contains "control-plane" or starts with "cp-")
-	isControlPlane := strings.Contains(session.Target, "control-plane") || strings.HasPrefix(session.Target, "cp-")
-	if !isControlPlane {
-		tm.logger.WithField("target", session.Target).Info("Using legacy connection for non-control-plane target")
-		tm.handleLegacyTerminalConnection(w, r, session)
 		return
 	}
 
@@ -335,132 +332,6 @@ func (tm *Manager) ResizeTerminal(terminalID string, rows, cols uint16) error {
 	}).Debug("Resize request received")
 
 	return nil
-}
-
-// handleVirtctlSSHConnection handles legacy (non-persistent) SSH connections
-func (tm *Manager) handleVirtctlSSHConnection(ctx context.Context, session *Session, ws *websocket.Conn) {
-	tm.logger.WithFields(logrus.Fields{
-		"terminalID": session.ID,
-		"vmName":     session.Target,
-		"namespace":  session.Namespace,
-	}).Info("Starting virtctl SSH terminal session")
-
-	// Create a channel to signal when the connection is done
-	done := make(chan struct{})
-	defer close(done)
-
-	// Create the virtctl ssh command with proper arguments for interactive use
-	args := []string{
-		"ssh",
-		fmt.Sprintf("vmi/%s", session.Target),
-		"-n", session.Namespace,
-		"-l", "suporte",
-		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
-	}
-
-	// Log the exact command being executed
-	tm.logger.WithFields(logrus.Fields{
-		"command": "virtctl",
-		"args":    args,
-	}).Debug("Executing virtctl SSH command")
-
-	// Create the command
-	cmd := exec.Command("virtctl", args...)
-
-	// Create a pty for the command
-	ptmx, err := pty.Start(cmd)
-	if err != nil {
-		tm.logger.WithError(err).Error("Failed to start pty")
-		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create terminal: %v", err)))
-		return
-	}
-	defer ptmx.Close()
-
-	// Set up terminal size if possible
-	if err := pty.Setsize(ptmx, &pty.Winsize{
-		Rows: 24,
-		Cols: 80,
-		X:    0,
-		Y:    0,
-	}); err != nil {
-		tm.logger.WithError(err).Warn("Failed to set initial terminal size")
-	}
-
-	// Set up a goroutine to handle reading from the pty
-	go func() {
-		buffer := make([]byte, 4096)
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				n, err := ptmx.Read(buffer)
-				if err != nil {
-					if err != io.EOF {
-						tm.logger.WithError(err).Debug("Error reading from pty")
-					}
-					return
-				}
-
-				if n > 0 {
-					if err := ws.WriteMessage(websocket.BinaryMessage, buffer[:n]); err != nil {
-						tm.logger.WithError(err).Warn("Error writing to WebSocket")
-						return
-					}
-				}
-			}
-		}
-	}()
-
-	// Set up a goroutine to handle reading from the WebSocket
-	go func() {
-		for {
-			messageType, p, err := ws.ReadMessage()
-			if err != nil {
-				tm.logger.WithError(err).Debug("WebSocket read error, closing pty")
-				return
-			}
-
-			// Handle terminal resize messages
-			if messageType == websocket.BinaryMessage && len(p) >= 5 && p[0] == 1 {
-				width := uint16(p[1])<<8 | uint16(p[2])
-				height := uint16(p[3])<<8 | uint16(p[4])
-
-				tm.logger.WithFields(logrus.Fields{
-					"width":  width,
-					"height": height,
-				}).Debug("Terminal resize request")
-
-				// Resize the pty
-				if err := pty.Setsize(ptmx, &pty.Winsize{
-					Rows: height,
-					Cols: width,
-					X:    0,
-					Y:    0,
-				}); err != nil {
-					tm.logger.WithError(err).Warn("Failed to resize terminal")
-				}
-				continue
-			}
-
-			// Write data to pty
-			if _, err := ptmx.Write(p); err != nil {
-				tm.logger.WithError(err).Warn("Error writing to pty")
-				return
-			}
-		}
-	}()
-
-	// Wait for the command to complete
-	err = cmd.Wait()
-
-	if err != nil {
-		tm.logger.WithError(err).Debug("SSH session ended with error")
-	} else {
-		tm.logger.Info("SSH session ended normally")
-	}
-
-	tm.logger.WithField("terminalID", session.ID).Info("Terminal session closed")
 }
 
 func (tm *Manager) cleanupExpiredSessions() {
@@ -574,11 +445,11 @@ func (tm *Manager) CleanupSessionSSH(sessionID string) {
 
 // GetOrCreatePersistentSSH gets existing or creates new persistent SSH connection
 func (tm *Manager) GetOrCreatePersistentSSH(sessionID, namespace, target string) (*PersistentSSHConnection, error) {
-	// Only handle control-plane for now
-	// Accept both "control-plane" and actual VM names starting with "cp-"
-	isControlPlane := target == "control-plane" || strings.HasPrefix(target, "cp-")
-	if !isControlPlane {
-		return nil, fmt.Errorf("persistent SSH only supported for control-plane currently")
+	// Support both control-plane and worker nodes
+	isValidTarget := target == "control-plane" || target == "worker-node" ||
+		strings.HasPrefix(target, "cp-") || strings.HasPrefix(target, "wk-")
+	if !isValidTarget {
+		return nil, fmt.Errorf("unsupported target type: %s", target)
 	}
 
 	connectionKey := fmt.Sprintf("%s-%s", sessionID, target)
@@ -680,11 +551,28 @@ func (tm *Manager) createPersistentSSHConnection(sessionID, namespace, target, c
 
 // getVMNameForTarget gets the actual VM name for a target
 func (tm *Manager) getVMNameForTarget(sessionID, namespace, target string) (string, error) {
-	// For control-plane in cluster pool, the VM name follows pattern: cp-clusterX
-	// We need to find which cluster this session is using
+	// If target is already a VM name (starts with cp- or wk-), use it directly
+	if strings.HasPrefix(target, "cp-") || strings.HasPrefix(target, "wk-") {
+		return target, nil
+	}
 
-	// Try cluster1, cluster2, cluster3 pattern first
-	clusterPatterns := []string{"cp-cluster1", "cp-cluster2", "cp-cluster3"}
+	// Handle generic target names
+	var vmPrefix string
+	switch target {
+	case "control-plane":
+		vmPrefix = "cp-"
+	case "worker-node":
+		vmPrefix = "wk-"
+	default:
+		return "", fmt.Errorf("unknown target type: %s", target)
+	}
+
+	// Try cluster pool patterns first: cp-cluster1, cp-cluster2, cp-cluster3
+	clusterPatterns := []string{
+		vmPrefix + "cluster1",
+		vmPrefix + "cluster2",
+		vmPrefix + "cluster3",
+	}
 
 	for _, vmName := range clusterPatterns {
 		// Check if VM exists in this namespace
@@ -695,7 +583,7 @@ func (tm *Manager) getVMNameForTarget(sessionID, namespace, target string) (stri
 	}
 
 	// Fallback: try session-based naming
-	vmName := fmt.Sprintf("cp-%s", sessionID)
+	vmName := fmt.Sprintf("%s%s", vmPrefix, sessionID)
 	return vmName, nil
 }
 
@@ -845,37 +733,4 @@ func (tm *Manager) bridgeWebSocketToSSH(sshConn *PersistentSSHConnection, ws *we
 			return nil
 		}
 	}
-}
-
-// handleLegacyTerminalConnection handles non-persistent connections (for worker nodes)
-func (tm *Manager) handleLegacyTerminalConnection(w http.ResponseWriter, r *http.Request, session *Session) {
-	// Set up websocket
-	upgrader := websocket.Upgrader{
-		ReadBufferSize:  1024,
-		WriteBufferSize: 1024,
-		CheckOrigin: func(r *http.Request) bool {
-			return true
-		},
-	}
-
-	// Upgrade connection to websocket
-	ws, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		tm.logger.WithError(err).Error("Failed to upgrade to WebSocket connection")
-		return
-	}
-	defer ws.Close()
-
-	tm.logger.WithFields(logrus.Fields{
-		"terminalID": session.ID,
-		"vmName":     session.Target,
-		"namespace":  session.Namespace,
-	}).Info("Handling legacy terminal connection")
-
-	// Create a context with timeout
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
-	defer cancel()
-
-	// Handle virtctl SSH connection (original implementation)
-	tm.handleVirtctlSSHConnection(ctx, session, ws)
 }
