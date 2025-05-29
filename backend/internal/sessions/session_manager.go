@@ -25,16 +25,17 @@ import (
 )
 
 type SessionManager struct {
-	sessions         map[string]*models.Session
-	lock             sync.RWMutex
-	clientset        *kubernetes.Clientset
-	kubevirtClient   *kubevirt.Client
-	config           *config.Config
-	validationEngine *validation.Engine
-	logger           *logrus.Logger
-	stopCh           chan struct{}
-	scenarioManager  *scenarios.ScenarioManager
-	clusterPool      *clusterpool.Manager
+	sessions            map[string]*models.Session
+	lock                sync.RWMutex
+	clientset           *kubernetes.Clientset
+	kubevirtClient      *kubevirt.Client
+	config              *config.Config
+	validationEngine    *validation.Engine
+	logger              *logrus.Logger
+	stopCh              chan struct{}
+	scenarioManager     *scenarios.ScenarioManager
+	clusterPool         *clusterpool.Manager
+	terminalCleanupFunc func(sessionID string)
 }
 
 func NewSessionManager(
@@ -65,6 +66,11 @@ func NewSessionManager(
 	go sm.cleanupExpiredSessions()
 
 	return sm, nil
+}
+
+// SetTerminalCleanupFunc sets the callback for cleaning up terminal connections
+func (sm *SessionManager) SetTerminalCleanupFunc(cleanupFunc func(sessionID string)) {
+	sm.terminalCleanupFunc = cleanupFunc
 }
 
 // CreateSession creates a new session using cluster pool assignment
@@ -225,7 +231,11 @@ func (sm *SessionManager) DeleteSession(ctx context.Context, sessionID string) e
 			}).Error("Failed to release cluster")
 		}
 	}
-
+	// Clean up persistent terminal connections
+	if sm.terminalCleanupFunc != nil {
+		sm.terminalCleanupFunc(sessionID)
+		sm.logger.WithField("sessionID", sessionID).Info("Cleaned up persistent terminal connections for deleted session")
+	}
 	return nil
 }
 

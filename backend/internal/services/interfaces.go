@@ -34,6 +34,7 @@ type TerminalService interface {
 	HandleTerminal(w http.ResponseWriter, r *http.Request, terminalID string)
 	ResizeTerminal(terminalID string, rows, cols uint16) error
 	CloseSession(terminalID string) error
+	CleanupSessionSSH(sessionID string) // Add this method
 }
 
 // ScenarioService defines the interface for scenario-related operations

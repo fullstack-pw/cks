@@ -39,3 +39,8 @@ func (t *TerminalServiceImpl) ResizeTerminal(terminalID string, rows, cols uint1
 func (t *TerminalServiceImpl) CloseSession(terminalID string) error {
 	return t.terminalManager.CloseSession(terminalID)
 }
+
+// CleanupSessionSSH cleans up persistent SSH connections for a session
+func (t *TerminalServiceImpl) CleanupSessionSSH(sessionID string) {
+	t.terminalManager.CleanupSessionSSH(sessionID)
+}

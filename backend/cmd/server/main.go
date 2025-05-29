@@ -131,6 +131,7 @@ func main() {
 	sessionService := services.NewSessionService(sessionManager)
 	terminalService := services.NewTerminalService(terminalManager)
 	scenarioService := services.NewScenarioService(scenarioManager)
+	sessionManager.SetTerminalCleanupFunc(terminalService.CleanupSessionSSH)
 
 	// Create and register controllers
 	sessionController := controllers.NewSessionController(sessionService, logger)
