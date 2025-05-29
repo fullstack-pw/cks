@@ -700,30 +700,6 @@ func (sm *SessionManager) GetSessionWithScenario(ctx context.Context, sessionID 
 	return session, scenario, nil
 }
 
-// cleanupEnvironment cleans up the Kubernetes resources for a session
-func (sm *SessionManager) cleanupEnvironment(ctx context.Context, session *models.Session) error {
-	sm.logger.WithFields(logrus.Fields{
-		"sessionID": session.ID,
-		"namespace": session.Namespace,
-	}).Info("Cleaning up environment")
-
-	// Delete VMs first to ensure clean shutdown
-	err := sm.kubevirtClient.DeleteVMs(ctx, session.Namespace, session.ControlPlaneVM, session.WorkerNodeVM)
-	if err != nil {
-		sm.logger.WithError(err).WithField("sessionID", session.ID).Error("Failed to delete VMs")
-		// Continue with namespace deletion
-	}
-
-	// Delete namespace (which will delete all resources in it)
-	err = sm.clientset.CoreV1().Namespaces().Delete(ctx, session.Namespace, metav1.DeleteOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to delete namespace: %w", err)
-	}
-
-	sm.logger.WithField("sessionID", session.ID).Info("Environment cleaned up successfully")
-	return nil
-}
-
 // cleanupExpiredSessions periodically checks and cleans up expired sessions
 func (sm *SessionManager) cleanupExpiredSessions() {
 	ticker := time.NewTicker(time.Duration(sm.config.CleanupIntervalMinutes) * time.Minute)
@@ -773,7 +749,7 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 
 				if session != nil {
 					// Clean up resources
-					err := sm.cleanupEnvironment(ctx, session)
+					err := sm.DeleteSession(ctx, id)
 					if err != nil {
 						sm.logger.WithError(err).WithField("sessionID", id).Error("Error cleaning up expired session environment")
 					}
