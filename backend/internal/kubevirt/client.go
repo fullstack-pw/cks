@@ -55,6 +55,26 @@ type RetryConfig struct {
 	Backoff    float64
 }
 
+// buildVirtctlSSHArgs builds standardized virtctl ssh arguments
+func (c *Client) buildVirtctlSSHArgs(namespace, vmName, username string, command string) []string {
+	args := []string{
+		"ssh",
+		fmt.Sprintf("vmi/%s", vmName),
+		"--namespace=" + namespace,
+		"--username=" + username,
+		"--local-ssh=true",
+		"--local-ssh-opts=-o StrictHostKeyChecking=no",
+		"--local-ssh-opts=-o UserKnownHostsFile=/dev/null",
+		"--local-ssh-opts=-o LogLevel=ERROR",
+	}
+
+	if command != "" {
+		args = append(args, "--command="+command)
+	}
+
+	return args
+}
+
 // getDefaultRetryConfig returns default retry configuration
 func getDefaultRetryConfig() RetryConfig {
 	return RetryConfig{
@@ -669,41 +689,70 @@ func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, comm
 
 	c.logger.WithField("actualVMName", actualVMName).Debug("Adjusted VM name for command execution")
 
-	// Create the virtctl ssh command with proper arguments
-	args := []string{
-		"ssh",
-		fmt.Sprintf("vmi/%s", vmName),
-		"-n", namespace,
-		"-l", "suporte",
-		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
-		"--command=" + command,
-	}
+	var output string
+	err := c.retryOperation(ctx, fmt.Sprintf("ssh-execute-%s", vmName), func() error {
+		// Create the virtctl ssh command with proper arguments
+		args := c.buildVirtctlSSHArgs(namespace, vmName, "suporte", command)
 
-	c.logger.WithField("virtctlArgs", args).Debug("Virtctl command arguments")
+		c.logger.WithFields(logrus.Fields{
+			"virtctlArgs": args,
+			"vmName":      vmName,
+			"namespace":   namespace,
+			"command":     command,
+		}).Debug("Virtctl command arguments")
 
-	cmd := exec.CommandContext(ctx, "virtctl", args...)
+		cmd := exec.CommandContext(ctx, "virtctl", args...)
 
-	// Create buffers for stdout and stderr
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+		// Create buffers for stdout and stderr
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
 
-	// Execute the command
-	if err := cmd.Run(); err != nil {
-		// Read error output
-		c.logger.WithError(err).WithFields(logrus.Fields{
-			"stderr": stderr.String(),
-			"stdout": stdout.String(),
-		}).Debug("Command execution failed")
-		return "", fmt.Errorf("command execution failed: %w, output: %s", err, stderr.String())
+		// Execute the command
+		if err := cmd.Run(); err != nil {
+			// Read error output
+			stderrStr := stderr.String()
+			stdoutStr := stdout.String()
+
+			c.logger.WithError(err).WithFields(logrus.Fields{
+				"stderr":    stderrStr,
+				"stdout":    stdoutStr,
+				"vmName":    vmName,
+				"namespace": namespace,
+				"command":   command,
+			}).Debug("SSH command execution failed (will retry if applicable)")
+
+			// Check for common SSH errors and provide better error messages
+			if strings.Contains(stderrStr, "Connection refused") {
+				return fmt.Errorf("SSH connection refused to VM %s - VM may not be ready yet", vmName)
+			}
+			if strings.Contains(stderrStr, "Host key verification failed") {
+				return fmt.Errorf("SSH host key verification failed for VM %s", vmName)
+			}
+			if strings.Contains(stderrStr, "Permission denied") {
+				return fmt.Errorf("SSH permission denied for VM %s - check username and authentication", vmName)
+			}
+			if strings.Contains(stderrStr, "No route to host") {
+				return fmt.Errorf("SSH no route to host for VM %s - network connectivity issue", vmName)
+			}
+
+			return fmt.Errorf("SSH command execution failed on VM %s: %w, stderr: %s", vmName, err, stderrStr)
+		}
+
+		output = stdout.String()
+		return nil
+	})
+
+	if err != nil {
+		return "", err
 	}
 
 	c.logger.WithFields(logrus.Fields{
-		"stdout": stdout.String(),
+		"stdout": output,
 		"vmName": actualVMName,
 	}).Debug("Command executed successfully")
 
-	return stdout.String(), nil
+	return output, nil
 }
 
 // substituteEnvVars replaces ${VAR} with the value of the environment variable VAR
@@ -1123,4 +1172,57 @@ func (c *Client) waitForRestoreComplete(ctx context.Context, namespace, restoreN
 
 		return false, nil
 	})
+}
+
+// IsVMSSHReady checks if a VM is ready for SSH connections
+func (c *Client) IsVMSSHReady(ctx context.Context, namespace, vmName string) (bool, error) {
+	c.logger.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmName":    vmName,
+	}).Debug("Checking if VM is SSH ready")
+
+	// First check if VM is running
+	status, err := c.GetVMStatus(ctx, namespace, vmName)
+	if err != nil {
+		return false, fmt.Errorf("failed to get VM status: %w", err)
+	}
+
+	if status != "Running" {
+		c.logger.WithFields(logrus.Fields{
+			"vmName": vmName,
+			"status": status,
+		}).Debug("VM is not in Running state")
+		return false, nil
+	}
+
+	// Try a simple SSH connection test
+	testCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	args := c.buildVirtctlSSHArgs(namespace, vmName, "suporte", "echo 'ssh-ready-test'")
+	cmd := exec.CommandContext(testCtx, "virtctl", args...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
+	if err != nil {
+		c.logger.WithError(err).WithFields(logrus.Fields{
+			"vmName": vmName,
+			"stderr": stderr.String(),
+		}).Debug("SSH readiness test failed")
+		return false, nil
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	isReady := strings.Contains(output, "ssh-ready-test")
+
+	c.logger.WithFields(logrus.Fields{
+		"vmName":  vmName,
+		"isReady": isReady,
+		"output":  output,
+	}).Debug("SSH readiness test completed")
+
+	return isReady, nil
 }

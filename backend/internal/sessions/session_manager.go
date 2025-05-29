@@ -788,7 +788,7 @@ func (sm *SessionManager) Stop() {
 	sm.logger.Info("Session manager stopped")
 }
 
-// CheckVMsStatus checks the status of VMs in a session
+// CheckVMsStatus checks the status of VMs in a session including SSH readiness
 func (sm *SessionManager) CheckVMsStatus(ctx context.Context, session *models.Session) (string, error) {
 	controlPlaneStatus, err := sm.kubevirtClient.GetVMStatus(ctx, session.Namespace, session.ControlPlaneVM)
 	if err != nil {
@@ -808,6 +808,32 @@ func (sm *SessionManager) CheckVMsStatus(ctx context.Context, session *models.Se
 
 	// Only return "Running" if both VMs are running
 	if controlPlaneStatus == "Running" && workerNodeStatus == "Running" {
+		// For cluster pool sessions, also check SSH readiness
+		if session.AssignedCluster != "" {
+			sm.logger.WithField("sessionID", session.ID).Debug("Checking SSH readiness for cluster pool VMs")
+
+			// Check SSH readiness with timeout
+			sshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+
+			cpSSHReady, _ := sm.kubevirtClient.IsVMSSHReady(sshCtx, session.Namespace, session.ControlPlaneVM)
+			workerSSHReady, _ := sm.kubevirtClient.IsVMSSHReady(sshCtx, session.Namespace, session.WorkerNodeVM)
+
+			sm.logger.WithFields(logrus.Fields{
+				"sessionID":      session.ID,
+				"cpSSHReady":     cpSSHReady,
+				"workerSSHReady": workerSSHReady,
+			}).Debug("SSH readiness check completed")
+
+			// If SSH is ready for both, return "Running"
+			if cpSSHReady && workerSSHReady {
+				return "Running", nil
+			}
+
+			// If VMs are running but SSH not ready, return "Starting"
+			return "Starting", nil
+		}
+
 		return "Running", nil
 	}
 

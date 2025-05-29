@@ -3,6 +3,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -304,12 +305,33 @@ func (tm *Manager) HandleTerminal(w http.ResponseWriter, r *http.Request, termin
 	}).Info("Handling persistent terminal connection")
 
 	// Get or create persistent SSH connection
+	tm.logger.WithFields(logrus.Fields{
+		"terminalID": terminalID,
+		"sessionID":  session.SessionID,
+		"namespace":  session.Namespace,
+		"target":     session.Target,
+	}).Info("Attempting to establish persistent SSH connection")
+
 	sshConn, err := tm.GetOrCreatePersistentSSH(session.SessionID, session.Namespace, session.Target)
 	if err != nil {
-		tm.logger.WithError(err).Error("Failed to get persistent SSH connection")
-		ws.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Failed to create persistent terminal: %v", err)))
+		tm.logger.WithError(err).WithFields(logrus.Fields{
+			"terminalID": terminalID,
+			"sessionID":  session.SessionID,
+			"namespace":  session.Namespace,
+			"target":     session.Target,
+		}).Error("Failed to get persistent SSH connection")
+
+		// Send more informative error message to client
+		errorMsg := fmt.Sprintf("Failed to create terminal connection: %v\n\nThis could be due to:\n- VM not ready yet\n- Network connectivity issues\n- SSH service not running in VM", err)
+		ws.WriteMessage(websocket.TextMessage, []byte(errorMsg))
 		return
 	}
+
+	tm.logger.WithFields(logrus.Fields{
+		"terminalID":    terminalID,
+		"connectionKey": sshConn.ID,
+		"activeConns":   sshConn.ActiveConns,
+	}).Info("Successfully established persistent SSH connection")
 
 	// Attach WebSocket to persistent SSH connection
 	err = tm.AttachToPersistentSSH(sshConn, ws)
@@ -492,6 +514,20 @@ func (tm *Manager) GetOrCreatePersistentSSH(sessionID, namespace, target string)
 	return conn, nil
 }
 
+// buildVirtctlSSHArgs builds standardized virtctl ssh arguments for terminal connections
+func (tm *Manager) buildVirtctlSSHArgs(namespace, vmName, username string) []string {
+	return []string{
+		"ssh",
+		fmt.Sprintf("vmi/%s", vmName),
+		"--namespace=" + namespace,
+		"--username=" + username,
+		"--local-ssh=true",
+		"--local-ssh-opts=-o StrictHostKeyChecking=no",
+		"--local-ssh-opts=-o UserKnownHostsFile=/dev/null",
+		"--local-ssh-opts=-o LogLevel=ERROR",
+	}
+}
+
 // createPersistentSSHConnection creates a new persistent SSH connection
 func (tm *Manager) createPersistentSSHConnection(sessionID, namespace, target, connectionKey string) (*PersistentSSHConnection, error) {
 	// Get the actual VM name for the target
@@ -499,21 +535,47 @@ func (tm *Manager) createPersistentSSHConnection(sessionID, namespace, target, c
 	if err != nil {
 		return nil, fmt.Errorf("failed to get VM name: %w", err)
 	}
-
-	// Create the virtctl ssh command
-	args := []string{
-		"ssh",
-		fmt.Sprintf("vmi/%s", vmName),
-		"-n", namespace,
-		"-l", "suporte",
-		"--local-ssh-opts", "-o StrictHostKeyChecking=no",
+	// Validate inputs
+	if sessionID == "" {
+		return nil, fmt.Errorf("sessionID cannot be empty")
 	}
+	if namespace == "" {
+		return nil, fmt.Errorf("namespace cannot be empty")
+	}
+	if vmName == "" {
+		return nil, fmt.Errorf("vmName cannot be empty")
+	}
+	// Test SSH connection before creating persistent connection
+	testCtx, cancelTest := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancelTest()
+
+	tm.logger.WithFields(logrus.Fields{
+		"connectionKey": connectionKey,
+		"vmName":        vmName,
+		"namespace":     namespace,
+	}).Info("Testing SSH connectivity before creating persistent connection")
+
+	err = tm.testSSHConnection(testCtx, namespace, vmName)
+	if err != nil {
+		tm.logger.WithError(err).WithFields(logrus.Fields{
+			"connectionKey": connectionKey,
+			"vmName":        vmName,
+			"namespace":     namespace,
+		}).Error("SSH connectivity test failed - VM may not be ready")
+		return nil, fmt.Errorf("SSH connectivity test failed for VM %s: %w", vmName, err)
+	}
+
+	tm.logger.WithField("vmName", vmName).Info("SSH connectivity test passed, proceeding with persistent connection")
+	// Create the virtctl ssh command
+	args := tm.buildVirtctlSSHArgs(namespace, vmName, "suporte")
 
 	tm.logger.WithFields(logrus.Fields{
 		"command":       "virtctl",
 		"args":          args,
 		"connectionKey": connectionKey,
-	}).Debug("Creating persistent SSH connection")
+		"vmName":        vmName,
+		"namespace":     namespace,
+	}).Debug("Creating persistent SSH connection with updated arguments")
 
 	// Create the command
 	cmd := exec.Command("virtctl", args...)
@@ -521,7 +583,19 @@ func (tm *Manager) createPersistentSSHConnection(sessionID, namespace, target, c
 	// Create a pty for the command
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start pty for persistent SSH: %w", err)
+		tm.logger.WithError(err).WithFields(logrus.Fields{
+			"connectionKey": connectionKey,
+			"vmName":        vmName,
+			"namespace":     namespace,
+			"command":       cmd.String(),
+		}).Error("Failed to start pty for persistent SSH connection")
+
+		// Check for common errors
+		if strings.Contains(err.Error(), "executable file not found") {
+			return nil, fmt.Errorf("virtctl command not found in PATH - ensure virtctl is installed")
+		}
+
+		return nil, fmt.Errorf("failed to start pty for persistent SSH to VM %s: %w", vmName, err)
 	}
 
 	// Set up initial terminal size
@@ -733,4 +807,45 @@ func (tm *Manager) bridgeWebSocketToSSH(sshConn *PersistentSSHConnection, ws *we
 			return nil
 		}
 	}
+}
+
+// testSSHConnection tests if SSH connection to a VM is working
+func (tm *Manager) testSSHConnection(ctx context.Context, namespace, vmName string) error {
+	tm.logger.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmName":    vmName,
+	}).Debug("Testing SSH connection to VM")
+
+	// Create a simple test command
+	args := tm.buildVirtctlSSHArgs(namespace, vmName, "suporte")
+	args = append(args, "--command=echo 'SSH connection test successful'")
+
+	// Create context with timeout for the test
+	testCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(testCtx, "virtctl", args...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		tm.logger.WithError(err).WithFields(logrus.Fields{
+			"namespace": namespace,
+			"vmName":    vmName,
+			"stderr":    stderr.String(),
+			"stdout":    stdout.String(),
+		}).Warn("SSH connection test failed")
+		return fmt.Errorf("SSH connection test failed for VM %s: %w", vmName, err)
+	}
+
+	output := strings.TrimSpace(stdout.String())
+	if !strings.Contains(output, "SSH connection test successful") {
+		return fmt.Errorf("SSH connection test returned unexpected output: %s", output)
+	}
+
+	tm.logger.WithField("vmName", vmName).Debug("SSH connection test successful")
+	return nil
 }
