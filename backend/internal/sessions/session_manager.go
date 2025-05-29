@@ -1147,3 +1147,8 @@ func (sm *SessionManager) cleanStaleTerminals() {
 		}
 	}
 }
+
+// GetClusterPool returns the cluster pool manager for admin operations
+func (sm *SessionManager) GetClusterPool() *clusterpool.Manager {
+	return sm.clusterPool
+}

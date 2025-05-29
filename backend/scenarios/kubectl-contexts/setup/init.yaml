@@ -15,7 +15,7 @@ steps:
       #!/bin/bash
 
       # Create a sample kubeconfig with multiple contexts
-      cat > /tmp/sample-kubeconfig.yaml << 'EOF'
+      cat > /tmp/sample-kubeconfig.yaml << 'ENDFILE'
       apiVersion: v1
       clusters:
       - cluster:
@@ -55,7 +55,7 @@ steps:
         user:
           client-certificate-data: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURIekNDQWdlZ0F3SUJBZ0lRTjVRZS9Sai9QaGFxY2tFSTIzTFBuakFOQmdrcWhraUc5dzBCQVFzRkFEQVYKTVJNd0VRWURWUVFERXdwcmRXSmxjbTVsZEdWek1CNFhEVEl3TURreU5qSXdOVFV3TkZvWERUTXhNRGt5TmpJdwpOVFV3TkZvd0tqRVRNQkVHQTFVRUNoTUthM1ZpWlhKdVpYUmxjekVUTUJFR0ExVUVBeE1LYTNWaVpYSnVaWFJsCmN6Q0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0NnZ0VCQUwvSmFmL1FRZGlqeUpUV0lEaWoKcWE1cDRvQWgreERCWDNqUjlSMEc1RGttUFUvRmdYanhlag==
           client-key-data: LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBdjhscC85QkIyS1BJbE5ZZ09LT3BybW5pZ0NIN0VNRmZlTkgxSFFia09TWTlUOFdCCmVQRjZQZXRQQWNsdTdHRHVxTk82cEJ0LzBWdllBZHhXM0FlQlNNTFhZNE5RMFQ2ZFcxcW42RUo3dzhzZG5BZnMKRVlWWmF4eUFpZGs1bGJZZ0JNci9FZHFRdHczZGpCWVVhUGFMK3FWMFF2MHU5VjdNZ3pJMi93eUkwRDdscGV3egpNa2RSMDM3eE1oa3oybnZRUFZvYVczalNyVFhBNlF1L0o5eEc5aUZGalZLMVg3RDdyWWc9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=
-      EOF
+      ENDFILE
 
       # Backup existing kubeconfig if it exists
       if [ -f ~/.kube/config ]; then

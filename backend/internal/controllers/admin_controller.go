@@ -35,6 +35,7 @@ func (ac *AdminController) RegisterRoutes(router *gin.Engine) {
 	{
 		admin.POST("/bootstrap-pool", ac.BootstrapClusterPool)
 		admin.POST("/create-snapshots", ac.CreatePoolSnapshots)
+		admin.POST("/release-all-clusters", ac.ReleaseAllClusters)
 	}
 }
 
@@ -92,6 +93,37 @@ func (ac *AdminController) CreatePoolSnapshots(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Snapshot creation completed",
 		"results": results,
+	})
+}
+
+// ReleaseAllClusters releases all clusters in the pool
+func (ac *AdminController) ReleaseAllClusters(c *gin.Context) {
+	ac.logger.Info("Admin request to release all clusters")
+
+	err := ac.sessionManager.GetClusterPool().ReleaseAllClusters()
+	if err != nil {
+		ac.logger.WithError(err).Error("Failed to release all clusters")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Failed to release all clusters",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	// Get current pool status after release
+	poolStats := ac.sessionManager.GetClusterPool().GetPoolStatus()
+
+	ac.logger.Info("All applicable clusters released successfully")
+	c.JSON(http.StatusOK, gin.H{
+		"message": "All applicable clusters released successfully",
+		"poolStatus": gin.H{
+			"totalClusters":     poolStats.TotalClusters,
+			"availableClusters": poolStats.AvailableClusters,
+			"resettingClusters": poolStats.ResettingClusters,
+			"lockedClusters":    poolStats.LockedClusters,
+			"errorClusters":     poolStats.ErrorClusters,
+			"statusByCluster":   poolStats.StatusByCluster,
+		},
 	})
 }
 

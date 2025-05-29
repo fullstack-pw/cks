@@ -231,14 +231,14 @@ func (si *ScenarioInitializer) executeScript(ctx context.Context, session *model
 		scriptFile := fmt.Sprintf("/tmp/setup-%s-%s.sh", session.ID, step.ID)
 
 		// Write script to file
-		cmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF && chmod +x %s", scriptFile, step.Script, scriptFile)
+		cmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF\nchmod +x %s", scriptFile, step.Script, scriptFile)
 		_, err := si.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, cmd)
 		if err != nil {
 			return fmt.Errorf("failed to create script file: %w", err)
 		}
 
 		// Execute script
-		output, err := si.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, scriptFile)
+		output, err := si.kubevirtClient.ExecuteCommandInVM(ctx, session.Namespace, target, fmt.Sprintf("bash %s", scriptFile))
 		if err != nil {
 			return fmt.Errorf("script execution failed: %w, output: %s", err, output)
 		}

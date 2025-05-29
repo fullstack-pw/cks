@@ -158,6 +158,52 @@ func (m *Manager) ReleaseCluster(sessionID string) error {
 	return fmt.Errorf("no cluster found for session %s", sessionID)
 }
 
+// ReleaseAllClusters releases all clusters in the pool regardless of assignment
+func (m *Manager) ReleaseAllClusters() error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	releasedClusters := make([]string, 0)
+
+	// Release all clusters in the pool
+	for clusterID, cluster := range m.clusters {
+		// Only release if currently locked or in error state
+
+		// Mark for reset
+		cluster.Status = models.StatusResetting
+		cluster.AssignedSession = ""
+		cluster.LockTime = time.Time{}
+
+		releasedClusters = append(releasedClusters, clusterID)
+
+		m.logger.WithFields(logrus.Fields{
+			"clusterID": clusterID,
+			"previousStatus": func() string {
+				if cluster.AssignedSession != "" {
+					return fmt.Sprintf("locked to session %s", cluster.AssignedSession)
+				}
+				return "error state"
+			}(),
+		}).Info("Cluster released and marked for reset")
+
+		// Trigger async reset
+		go m.resetClusterAsync(clusterID)
+
+	}
+
+	if len(releasedClusters) == 0 {
+		m.logger.Info("No clusters needed to be released - all already available")
+		return nil
+	}
+
+	m.logger.WithFields(logrus.Fields{
+		"releasedClusters": releasedClusters,
+		"totalReleased":    len(releasedClusters),
+	}).Info("Released all applicable clusters")
+
+	return nil
+}
+
 // GetPoolStatus returns current pool statistics
 func (m *Manager) GetPoolStatus() *models.ClusterPoolStats {
 	m.lock.RLock()
