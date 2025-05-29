@@ -1091,14 +1091,23 @@ func (sm *SessionManager) cleanStaleTerminals() {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
-	for sessionID, session := range sm.sessions {
-		if session.ActiveTerminals != nil && len(session.ActiveTerminals) > 0 {
-			// Clear all terminal sessions on backend restart
-			// Frontend will create new ones as needed
-			session.ActiveTerminals = make(map[string]models.TerminalInfo)
-			session.TerminalSessions = make(map[string]string)
+	sm.logger.Info("Checking for stale terminals on startup")
 
-			sm.logger.WithField("sessionID", sessionID).Info("Cleared stale terminal sessions")
+	// Don't clear terminals on restart - let them reconnect
+	// Only clear if explicitly marked as disconnected for too long
+	for sessionID, session := range sm.sessions {
+		if session.ActiveTerminals != nil {
+			for terminalID, terminalInfo := range session.ActiveTerminals {
+				// Only clear if disconnected for more than 5 minutes
+				if terminalInfo.Status == "disconnected" &&
+					time.Since(terminalInfo.LastUsedAt) > 5*time.Minute {
+					delete(session.ActiveTerminals, terminalID)
+					sm.logger.WithFields(logrus.Fields{
+						"sessionID":  sessionID,
+						"terminalID": terminalID,
+					}).Info("Removed stale disconnected terminal")
+				}
+			}
 		}
 	}
 }

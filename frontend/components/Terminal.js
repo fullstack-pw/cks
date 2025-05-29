@@ -37,19 +37,13 @@ const TerminalComponent = dynamic(
                 const [currentSearchIndex, setCurrentSearchIndex] = useState(0);
                 const [totalSearchResults, setTotalSearchResults] = useState(0);
 
-                // Connect to WebSocket
+                // Update the connectWebSocket function (around line 50)
                 const connectWebSocket = useCallback(() => {
                     if (!isComponentMounted.current) return;
                     if (!terminalId || !terminal.current) return;
                     if (socket.current?.readyState === WebSocket.CONNECTING) return;
 
                     // Disconnect existing connection first
-                    disconnectWebSocket();
-                    if (!terminalId || !terminal.current || socket.current?.readyState === WebSocket.CONNECTING) {
-                        return;
-                    }
-
-                    // Close existing connection
                     disconnectWebSocket();
 
                     // Show connecting message
@@ -70,8 +64,9 @@ const TerminalComponent = dynamic(
                             setConnected(true);
                             reconnectAttempts.current = 0;
                             if (onConnectionChange) onConnectionChange(true);
-                            terminal.current.writeln('\r\nConnection established!');
                             terminal.current.clear();
+                            terminal.current.writeln('Connected to terminal!');
+                            terminal.current.writeln('');
 
                             // Send initial terminal size
                             sendTerminalSize();
@@ -84,7 +79,7 @@ const TerminalComponent = dynamic(
                             setConnected(false);
                             if (onConnectionChange) onConnectionChange(false);
 
-                            // Only reconnect if component is still mounted and not intentionally closed
+                            // Retry connection if not intentionally closed
                             if (isComponentMounted.current && event.code !== 1000) {
                                 terminal.current.writeln('\r\nConnection closed. Attempting to reconnect...');
                                 scheduleReconnect();
@@ -118,6 +113,7 @@ const TerminalComponent = dynamic(
                     } catch (error) {
                         console.error('Error creating WebSocket connection:', error);
                         terminal.current.writeln(`\r\nFailed to connect: ${error.message}`);
+                        scheduleReconnect();
                     }
                 }, [terminalId, onConnectionChange]);
 

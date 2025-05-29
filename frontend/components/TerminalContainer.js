@@ -6,7 +6,7 @@ import { Button, LoadingState, ErrorState, StatusIndicator } from './common';
 
 /**
  * Container component for terminals that manages tabs and terminal sessions
- * with persistence across validation operations.
+ * with better persistence and reconnection handling.
  */
 const TerminalContainer = ({ sessionId }) => {
     // Terminal tabs state
@@ -26,14 +26,12 @@ const TerminalContainer = ({ sessionId }) => {
 
     // Track component mount status
     const isMounted = useRef(true);
-    const cleanupFunctions = useRef([]);
-    const hasInitialized = useRef(false);
+    const initializationAttempted = useRef(false);
 
-    // Create or get existing terminal session
-    const createOrGetTerminalSession = useCallback(async (target) => {
-        // Skip if already loading or if the terminal already exists and is connected
-        if (terminalSessions[target].isLoading ||
-            (terminalSessions[target].id && terminalSessions[target].connected)) {
+    // Create terminal session - always create new on mount
+    const createTerminalSession = useCallback(async (target) => {
+        // Skip if already loading
+        if (terminalSessions[target].isLoading) {
             return;
         }
 
@@ -44,7 +42,7 @@ const TerminalContainer = ({ sessionId }) => {
                 [target]: { ...prev[target], isLoading: true, error: null }
             }));
 
-            console.log(`Creating/getting terminal for ${target}...`);
+            console.log(`Creating terminal for ${target}...`);
             const result = await api.terminals.create(sessionId, target);
 
             if (isMounted.current) {
@@ -57,9 +55,11 @@ const TerminalContainer = ({ sessionId }) => {
                         connected: false
                     }
                 }));
+
+                console.log(`Terminal created: ${result.terminalId}`);
             }
         } catch (error) {
-            console.error(`Failed to create/get ${target} terminal:`, error);
+            console.error(`Failed to create ${target} terminal:`, error);
 
             if (isMounted.current) {
                 setTerminalSessions(prev => ({
@@ -72,7 +72,7 @@ const TerminalContainer = ({ sessionId }) => {
                 }));
             }
         }
-    }, [sessionId, terminalSessions]);
+    }, [sessionId]);
 
     // Handle terminal connection status change
     const handleConnectionChange = useCallback((target, isConnected) => {
@@ -90,41 +90,22 @@ const TerminalContainer = ({ sessionId }) => {
 
         // Create terminal session if it doesn't exist and session is ready
         if (sessionStatus.isReady && !terminalSessions[target].id && !terminalSessions[target].isLoading) {
-            createOrGetTerminalSession(target);
+            createTerminalSession(target);
         }
-    }, [sessionStatus.isReady, terminalSessions, createOrGetTerminalSession]);
+    }, [sessionStatus.isReady, terminalSessions, createTerminalSession]);
 
-    // Initialize terminals from session data
-    const initializeExistingTerminals = useCallback(async (session) => {
-        if (!session.activeTerminals || hasInitialized.current) return;
-
-        console.log('Initializing existing terminals from session:', session.activeTerminals);
-
-        const updates = {};
-        for (const [terminalId, terminalInfo] of Object.entries(session.activeTerminals)) {
-            // Always try to reuse terminals marked as active, even if disconnected
-            if (terminalInfo.status === 'active') {
-                updates[terminalInfo.target] = {
-                    id: terminalId,
-                    isLoading: false,
-                    error: null,
-                    connected: false // Will be updated when WebSocket connects
-                };
-
-                console.log(`Reusing terminal ${terminalId} for ${terminalInfo.target}`);
-            }
+    // Initialize terminals - simplified approach
+    const initializeTerminals = useCallback(async () => {
+        if (!sessionStatus.isReady || initializationAttempted.current) {
+            return;
         }
 
-        if (Object.keys(updates).length > 0) {
-            setTerminalSessions(prev => ({
-                ...prev,
-                ...updates
-            }));
-            hasInitialized.current = true;
+        initializationAttempted.current = true;
+        console.log('Initializing terminals for session');
 
-            console.log(`Initialized ${Object.keys(updates).length} existing terminals`);
-        }
-    }, []);
+        // Always create control plane terminal on mount
+        await createTerminalSession('control-plane');
+    }, [sessionStatus.isReady, createTerminalSession]);
 
     // Component mount/unmount
     useEffect(() => {
@@ -132,23 +113,22 @@ const TerminalContainer = ({ sessionId }) => {
 
         return () => {
             isMounted.current = false;
-            // Execute all cleanup functions
-            cleanupFunctions.current.forEach(cleanup => cleanup());
-            cleanupFunctions.current = [];
         };
     }, []);
 
-    // Update the session status polling effect
+    // Check session status
     useEffect(() => {
         if (!sessionId) return;
 
+        let cancelled = false;
+
         const checkSessionStatus = async () => {
-            if (!isMounted.current) return;
+            if (cancelled) return;
 
             try {
                 const session = await api.sessions.get(sessionId);
 
-                if (!isMounted.current) return;
+                if (cancelled || !isMounted.current) return;
 
                 // Sessions from cluster pool are immediately running
                 if (session.status === 'running') {
@@ -158,18 +138,6 @@ const TerminalContainer = ({ sessionId }) => {
                         message: 'Session is ready',
                         error: null
                     });
-
-                    // ALWAYS try to initialize existing terminals from session
-                    await initializeExistingTerminals(session);
-
-                    // Only create control plane terminal if no terminals exist at all
-                    if (!hasInitialized.current &&
-                        !terminalSessions['control-plane'].id &&
-                        !terminalSessions['control-plane'].isLoading &&
-                        Object.keys(session.activeTerminals || {}).length === 0) {
-                        console.log('No existing terminals found, creating control plane terminal');
-                        createOrGetTerminalSession('control-plane');
-                    }
                 } else if (session.status === 'failed') {
                     setSessionStatus({
                         isReady: false,
@@ -178,46 +146,41 @@ const TerminalContainer = ({ sessionId }) => {
                         error: session.statusMessage || 'Session failed'
                     });
                 } else {
-                    // Handle unexpected status - shouldn't happen with cluster pool
+                    // Handle other statuses
                     setSessionStatus({
                         isReady: false,
-                        isLoading: false,
-                        message: `Unexpected session status: ${session.status}`,
+                        isLoading: true,
+                        message: `Session status: ${session.status}`,
                         error: null
                     });
                 }
             } catch (error) {
-                if (isMounted.current) {
-                    setSessionStatus({
-                        isReady: false,
-                        isLoading: false,
-                        message: 'Unable to check session status',
-                        error: error.message || 'Unknown error'
-                    });
-                }
+                if (cancelled || !isMounted.current) return;
+
+                setSessionStatus({
+                    isReady: false,
+                    isLoading: false,
+                    message: 'Unable to check session status',
+                    error: error.message || 'Unknown error'
+                });
             }
         };
 
         // Check immediately
         checkSessionStatus();
 
-        // Add a single retry after 2 seconds for better terminal recovery
-        const retryTimeout = setTimeout(() => {
-            if (isMounted.current && sessionStatus.isReady && !hasInitialized.current) {
-                console.log('Retrying terminal initialization after page refresh');
-                checkSessionStatus();
-            }
-        }, 2000);
-
-        // Cleanup function
-        const cleanup = () => {
-            clearTimeout(retryTimeout);
+        return () => {
+            cancelled = true;
         };
+    }, [sessionId]);
 
-        cleanupFunctions.current.push(cleanup);
+    // Initialize terminals when session is ready
+    useEffect(() => {
+        if (sessionStatus.isReady) {
+            initializeTerminals();
+        }
+    }, [sessionStatus.isReady, initializeTerminals]);
 
-        return cleanup;
-    }, [sessionId, createOrGetTerminalSession, terminalSessions, initializeExistingTerminals, sessionStatus.isReady]);
     return (
         <div className="h-full flex flex-col">
             {/* Terminal tabs */}
@@ -257,17 +220,12 @@ const TerminalContainer = ({ sessionId }) => {
                         ) : (
                             <>
                                 <p className="text-center mb-2">{sessionStatus.message}</p>
-
-                                {sessionStatus.error ? (
+                                {sessionStatus.error && (
                                     <ErrorState
                                         message="Failed to prepare environment"
                                         details={sessionStatus.error}
                                         onRetry={() => window.location.reload()}
                                     />
-                                ) : (
-                                    <p className="text-center text-sm mt-2 text-gray-400">
-                                        VMs typically take about 5 minutes to initialize.
-                                    </p>
                                 )}
                             </>
                         )}
@@ -278,7 +236,8 @@ const TerminalContainer = ({ sessionId }) => {
                 {sessionStatus.isReady && (
                     <>
                         {/* Control plane terminal */}
-                        <div className={`absolute inset-0 transition-opacity duration-300 ${activeTab === 'control-plane' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
+                        <div className={`absolute inset-0 transition-opacity duration-300 ${activeTab === 'control-plane' ? 'opacity-100 z-10' : 'opacity-0 z-0'
+                            }`}>
                             {terminalSessions['control-plane'].id ? (
                                 <Terminal
                                     terminalId={terminalSessions['control-plane'].id}
@@ -292,12 +251,12 @@ const TerminalContainer = ({ sessionId }) => {
                                         <ErrorState
                                             message="Failed to create terminal"
                                             details={terminalSessions['control-plane'].error}
-                                            onRetry={() => createOrGetTerminalSession('control-plane')}
+                                            onRetry={() => createTerminalSession('control-plane')}
                                         />
                                     ) : (
                                         <Button
                                             variant="primary"
-                                            onClick={() => createOrGetTerminalSession('control-plane')}
+                                            onClick={() => createTerminalSession('control-plane')}
                                         >
                                             Connect to Control Plane
                                         </Button>
@@ -307,7 +266,8 @@ const TerminalContainer = ({ sessionId }) => {
                         </div>
 
                         {/* Worker node terminal */}
-                        <div className={`absolute inset-0 transition-opacity duration-300 ${activeTab === 'worker-node' ? 'opacity-100 z-10' : 'opacity-0 z-0'}`}>
+                        <div className={`absolute inset-0 transition-opacity duration-300 ${activeTab === 'worker-node' ? 'opacity-100 z-10' : 'opacity-0 z-0'
+                            }`}>
                             {terminalSessions['worker-node'].id ? (
                                 <Terminal
                                     terminalId={terminalSessions['worker-node'].id}
@@ -321,12 +281,12 @@ const TerminalContainer = ({ sessionId }) => {
                                         <ErrorState
                                             message="Failed to create terminal"
                                             details={terminalSessions['worker-node'].error}
-                                            onRetry={() => createOrGetTerminalSession('worker-node')}
+                                            onRetry={() => createTerminalSession('worker-node')}
                                         />
                                     ) : (
                                         <Button
                                             variant="primary"
-                                            onClick={() => createOrGetTerminalSession('worker-node')}
+                                            onClick={() => createTerminalSession('worker-node')}
                                         >
                                             Connect to Worker Node
                                         </Button>

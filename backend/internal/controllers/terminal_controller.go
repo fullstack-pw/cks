@@ -90,42 +90,12 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		return
 	}
 
-	// Check for existing terminal first (with deterministic ID logic)
-	expectedTerminalID, isExisting, err := tc.sessionService.GetOrCreateTerminalSession(sessionID, request.Target)
-	if err != nil {
-		tc.logger.WithError(err).Error("Failed to check existing terminals")
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to check terminals: %v", err)})
-		return
-	}
-
-	if isExisting {
-		// Return existing terminal
-		tc.logger.WithFields(logrus.Fields{
-			"sessionID":  sessionID,
-			"terminalID": expectedTerminalID,
-			"target":     request.Target,
-		}).Info("Returning existing terminal session")
-
-		c.JSON(http.StatusOK, models.CreateTerminalResponse{
-			TerminalID: expectedTerminalID,
-		})
-		return
-	}
-
-	// Create new terminal session using the expected deterministic ID
+	// Always create or get terminal session
 	terminalID, err := tc.terminalService.CreateSession(sessionID, session.Namespace, targetVM)
 	if err != nil {
 		tc.logger.WithError(err).Error("Failed to create terminal session")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to create terminal: %v", err)})
 		return
-	}
-
-	// Verify the created terminal ID matches expected deterministic pattern
-	if terminalID != expectedTerminalID {
-		tc.logger.WithFields(logrus.Fields{
-			"createdTerminalID":  terminalID,
-			"expectedTerminalID": expectedTerminalID,
-		}).Warn("Terminal ID mismatch detected")
 	}
 
 	// Store terminal info in session
@@ -135,26 +105,13 @@ func (tc *TerminalController) CreateTerminal(c *gin.Context) {
 		// Continue anyway, don't fail the request
 	}
 
-	// Keep existing registration for backward compatibility
-	err = tc.sessionService.RegisterTerminalSession(sessionID, terminalID, request.Target)
-	if err != nil {
-		tc.logger.WithError(err).Error("Failed to register terminal session")
-		// Try to close the terminal session we just created
-		closeErr := tc.terminalService.CloseSession(terminalID)
-		if closeErr != nil {
-			tc.logger.WithError(closeErr).WithField("terminalID", terminalID).Error("Failed to clean up terminal after registration failure")
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to register terminal: %v", err)})
-		return
-	}
-
 	tc.logger.WithFields(logrus.Fields{
 		"sessionID":  sessionID,
 		"terminalID": terminalID,
 		"target":     request.Target,
-	}).Info("Terminal session created with deterministic ID")
+	}).Info("Terminal session created/retrieved")
 
-	c.JSON(http.StatusCreated, models.CreateTerminalResponse{
+	c.JSON(http.StatusOK, models.CreateTerminalResponse{
 		TerminalID: terminalID,
 	})
 }

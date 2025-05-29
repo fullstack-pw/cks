@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/fullstack-pw/cks/backend/internal/kubevirt"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // Manager handles terminal sessions
@@ -104,20 +107,111 @@ func (tm *Manager) CreateSession(sessionID, namespace, target string) (string, e
 	return terminalID, nil
 }
 
-// GetSession retrieves a terminal session
+// GetSession retrieves a terminal session or recreates it if it matches the expected pattern
 func (tm *Manager) GetSession(terminalID string) (*Session, error) {
 	tm.lock.RLock()
-	defer tm.lock.RUnlock()
+	session, exists := tm.sessions[terminalID]
+	tm.lock.RUnlock()
 
-	session, ok := tm.sessions[terminalID]
-	if !ok {
+	if exists {
+		// Update last used time
+		session.LastUsed = time.Now()
+		return session, nil
+	}
+
+	// Check if this is a valid terminal ID pattern (sessionID-target)
+	// Expected format: "xxxxxxxx-control-plane" or "xxxxxxxx-worker-node"
+	if !tm.isValidTerminalID(terminalID) {
 		return nil, fmt.Errorf("terminal session not found: %s", terminalID)
 	}
 
-	// Update last used time
-	session.LastUsed = time.Now()
+	// Extract sessionID and target from terminalID
+	parts := strings.Split(terminalID, "-")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid terminal ID format: %s", terminalID)
+	}
+
+	sessionID := parts[0]
+	target := strings.Join(parts[1:], "-") // Handle "control-plane" and "worker-node"
+
+	tm.logger.WithFields(logrus.Fields{
+		"terminalID": terminalID,
+		"sessionID":  sessionID,
+		"target":     target,
+	}).Info("Auto-creating terminal session for reconnection")
+
+	// We need namespace info, but we can derive it from the pattern
+	// For cluster pool, namespace is "cluster1", "cluster2", or "cluster3"
+	// We'll need to get this from somewhere... for now, let's add a method to find it
+	namespace := tm.findNamespaceForSession(sessionID)
+	if namespace == "" {
+		return nil, fmt.Errorf("cannot determine namespace for session: %s", sessionID)
+	}
+
+	// Create the session
+	tm.lock.Lock()
+	defer tm.lock.Unlock()
+
+	// Double-check it wasn't created while we were waiting for the lock
+	if existingSession, exists := tm.sessions[terminalID]; exists {
+		existingSession.LastUsed = time.Now()
+		return existingSession, nil
+	}
+
+	// Create new session
+	session = &Session{
+		ID:               terminalID,
+		SessionID:        sessionID,
+		Target:           target,
+		Namespace:        namespace,
+		Created:          time.Now(),
+		LastUsed:         time.Now(),
+		ActiveConnection: false,
+	}
+
+	tm.sessions[terminalID] = session
+	tm.logger.WithFields(logrus.Fields{
+		"terminalID": terminalID,
+		"namespace":  namespace,
+		"target":     target,
+	}).Info("Terminal session auto-created for reconnection")
 
 	return session, nil
+}
+
+// Add helper method to validate terminal ID format
+func (tm *Manager) isValidTerminalID(terminalID string) bool {
+	// Must match pattern: 8chars-target where target is "control-plane" or "worker-node"
+	pattern := `^[a-f0-9]{8}-(control-plane|worker-node)$`
+	matched, _ := regexp.MatchString(pattern, terminalID)
+	return matched
+}
+
+// Add helper method to find namespace for a session
+func (tm *Manager) findNamespaceForSession(sessionID string) string {
+	// For cluster pool implementation, we need to check which cluster the session is assigned to
+	// This is a simplified version - in production, you'd query the session service
+
+	// Try cluster1, cluster2, cluster3 (for cluster pool)
+	namespaces := []string{"cluster1", "cluster2", "cluster3"}
+
+	// Also try the session-based namespace pattern
+	namespaces = append(namespaces, fmt.Sprintf("cks-%s", sessionID))
+
+	// Check if any VMs exist in these namespaces
+	for _, ns := range namespaces {
+		// Quick check if namespace exists and has VMs
+		vms, err := tm.kubevirtClient.VirtClient().VirtualMachine(ns).List(context.Background(), metav1.ListOptions{})
+		if err == nil && len(vms.Items) > 0 {
+			tm.logger.WithFields(logrus.Fields{
+				"sessionID": sessionID,
+				"namespace": ns,
+			}).Debug("Found namespace for session")
+			return ns
+		}
+	}
+
+	return ""
 }
 
 // CloseSession closes a terminal session
