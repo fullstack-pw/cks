@@ -30,7 +30,7 @@ type SessionManager struct {
 	clientset           *kubernetes.Clientset
 	kubevirtClient      *kubevirt.Client
 	config              *config.Config
-	validationEngine    *validation.Engine
+	unifiedValidator    *validation.UnifiedValidator
 	logger              *logrus.Logger
 	stopCh              chan struct{}
 	scenarioManager     *scenarios.ScenarioManager
@@ -42,7 +42,7 @@ func NewSessionManager(
 	cfg *config.Config,
 	clientset *kubernetes.Clientset,
 	kubevirtClient *kubevirt.Client,
-	validationEngine *validation.Engine,
+	unifiedValidator *validation.UnifiedValidator,
 	logger *logrus.Logger,
 	scenarioManager *scenarios.ScenarioManager,
 	clusterPool *clusterpool.Manager,
@@ -52,7 +52,7 @@ func NewSessionManager(
 		clientset:        clientset,
 		kubevirtClient:   kubevirtClient,
 		config:           cfg,
-		validationEngine: validationEngine,
+		unifiedValidator: unifiedValidator,
 		logger:           logger,
 		stopCh:           make(chan struct{}),
 		scenarioManager:  scenarioManager,
@@ -300,7 +300,7 @@ func (sm *SessionManager) UpdateTaskStatus(sessionID, taskID string, status stri
 }
 
 // Update ValidateTask method
-func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID string) (*models.ValidationResponse, error) {
+func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID string) (*validation.ValidationResponse, error) {
 	// Get session
 	session, err := sm.GetSession(sessionID)
 	if err != nil {
@@ -403,10 +403,11 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		}).Warn("Task has no validation rules")
 
 		// Return success if no validation rules
-		return &models.ValidationResponse{
-			Success: true,
-			Message: "No validation rules defined for this task",
-			Details: []models.ValidationDetail{},
+		return &validation.ValidationResponse{
+			Success:   true,
+			Message:   "No validation rules defined for this task",
+			Results:   []validation.ValidationResult{},
+			Timestamp: time.Now(),
 		}, nil
 	}
 
@@ -420,8 +421,8 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		}).Debug("Validating rule")
 	}
 
-	// Validate task using the validation engine
-	result, err := sm.validationEngine.ValidateTask(ctx, session, *taskToValidate)
+	// Validate task using the unified validator
+	result, err := sm.unifiedValidator.ValidateTask(ctx, session, taskToValidate.Validation)
 	if err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
@@ -448,14 +449,14 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 		"taskID":    taskID,
 		"success":   result.Success,
 		"status":    status,
-		"details":   len(result.Details),
+		"details":   len(result.Results),
 	}).Info("Task validation completed")
 
 	return result, nil
 }
 
 // NEW METHOD: Store validation results in session
-func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, status string, validationResult *models.ValidationResponse) error {
+func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, status string, validationResult *validation.ValidationResponse) error {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
 
@@ -473,7 +474,7 @@ func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, s
 			session.Tasks[i].ValidationResult = &models.ValidationResult{
 				Success:   validationResult.Success,
 				Message:   validationResult.Message,
-				Details:   validationResult.Details,
+				Details:   convertValidationDetails(validationResult.Results),
 				Timestamp: time.Now(),
 			}
 			found = true
@@ -490,7 +491,7 @@ func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, s
 			ValidationResult: &models.ValidationResult{
 				Success:   validationResult.Success,
 				Message:   validationResult.Message,
-				Details:   validationResult.Details,
+				Details:   convertValidationDetails(validationResult.Results),
 				Timestamp: time.Now(),
 			},
 		})
@@ -504,6 +505,24 @@ func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, s
 	}).Info("Task validation result stored in session")
 
 	return nil
+}
+
+// convertValidationDetails converts validation.ValidationResult to models.ValidationDetail
+func convertValidationDetails(results []validation.ValidationResult) []models.ValidationDetail {
+	details := make([]models.ValidationDetail, len(results))
+	for i, result := range results {
+		details[i] = models.ValidationDetail{
+			Rule:         result.RuleID,
+			Passed:       result.Passed,
+			Message:      result.Message,
+			Expected:     result.Expected,
+			Actual:       result.Actual,
+			Description:  "",
+			Type:         result.RuleType,
+			ErrorDetails: result.ErrorCode,
+		}
+	}
+	return details
 }
 
 // RegisterTerminalSession registers a terminal session for a VM

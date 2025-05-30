@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fullstack-pw/cks/backend/internal/models"
+	"github.com/fullstack-pw/cks/backend/internal/validation"
 )
 
 // SessionService defines the interface for session-related operations
@@ -18,7 +19,7 @@ type SessionService interface {
 	DeleteSession(ctx context.Context, sessionID string) error
 	ExtendSession(sessionID string, duration time.Duration) error
 	UpdateTaskStatus(sessionID, taskID string, status string) error
-	ValidateTask(ctx context.Context, sessionID, taskID string) (*models.ValidationResponse, error)
+	ValidateTask(ctx context.Context, sessionID, taskID string) (*validation.ValidationResponse, error)
 	CheckVMsStatus(ctx context.Context, session *models.Session) (string, error)
 	UpdateSessionStatus(sessionID string, status models.SessionStatus, message string) error
 	RegisterTerminalSession(sessionID, terminalID, target string) error

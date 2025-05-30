@@ -115,9 +115,6 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create kubevirt client")
 	}
 
-	// Create validation engine (existing)
-	validationEngine := validation.NewEngine(kubevirtClient, logger)
-
 	// Create unified validator (ADD THIS)
 	unifiedValidator := validation.NewUnifiedValidator(kubevirtClient, logger)
 
@@ -137,7 +134,7 @@ func main() {
 	}
 
 	// Update session manager creation with cluster pool
-	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, validationEngine, logger, scenarioManager, clusterPoolManager)
+	sessionManager, err := sessions.NewSessionManager(cfg, kubeClient, kubevirtClient, unifiedValidator, logger, scenarioManager, clusterPoolManager)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create session manager")
 	}

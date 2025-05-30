@@ -8,6 +8,7 @@ import (
 
 	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/fullstack-pw/cks/backend/internal/sessions"
+	"github.com/fullstack-pw/cks/backend/internal/validation"
 )
 
 // SessionServiceImpl implements the SessionService interface
@@ -53,7 +54,7 @@ func (s *SessionServiceImpl) UpdateTaskStatus(sessionID, taskID string, status s
 }
 
 // ValidateTask validates a task
-func (s *SessionServiceImpl) ValidateTask(ctx context.Context, sessionID, taskID string) (*models.ValidationResponse, error) {
+func (s *SessionServiceImpl) ValidateTask(ctx context.Context, sessionID, taskID string) (*validation.ValidationResponse, error) {
 	return s.sessionManager.ValidateTask(ctx, sessionID, taskID)
 }
 
