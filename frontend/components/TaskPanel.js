@@ -1,44 +1,19 @@
 // frontend/components/TaskPanel.js
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
-import ValidationDisplay from './ValidationDisplay';
+import TaskValidation from './TaskValidation';
 import { useError } from '../hooks/useError';
 
-
 const TaskPanel = ({ sessionId, scenarioId }) => {
-    const { session, validateTask, isLoading: sessionLoading } = useSession(sessionId);
+    const { session, isLoading: sessionLoading } = useSession(sessionId);
     const [scenario, setScenario] = useState(null);
     const [activeTaskIndex, setActiveTaskIndex] = useState(0);
     const [showHints, setShowHints] = useState({});
     const [loading, setLoading] = useState(true);
     const { error, handleError, clearError } = useError('task-panel');
     const [showAllTasks, setShowAllTasks] = useState(false);
-    const [isValidating, setIsValidating] = useState(false);
-
-    // Enhanced task validation handler - much simpler now
-    const handleValidateTask = useCallback(async (taskId, event) => {
-        if (event) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
-
-        if (isValidating) return;
-
-        try {
-            setIsValidating(true);
-            console.log("[VALIDATE] Starting validation for task:", taskId);
-
-            await validateTask(sessionId, taskId);
-
-            console.log("[VALIDATE] Validation completed successfully");
-        } catch (err) {
-            console.error('[VALIDATE] Validation error:', err);
-        } finally {
-            setIsValidating(false);
-        }
-    }, [sessionId, validateTask, isValidating]);
 
     const toggleHint = (taskId) => {
         setShowHints(prev => ({
@@ -47,15 +22,14 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         }));
     };
 
-    // Get task status and validation result from session
-    const getTaskData = useCallback((taskId) => {
+    // Get task status from session (simplified)
+    const getTaskStatus = useMemo(() => {
         if (!session || !session.tasks) {
-            return { status: 'pending', validationResult: null };
+            return (taskId) => 'pending';
         }
-        const task = session.tasks.find(t => t.id === taskId);
-        return {
-            status: task ? task.status : 'pending',
-            validationResult: task ? task.validationResult : null
+        return (taskId) => {
+            const task = session.tasks.find(t => t.id === taskId);
+            return task ? task.status : 'pending';
         };
     }, [session]);
 
@@ -81,7 +55,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         };
 
         fetchScenario();
-    }, [scenarioId]);
+    }, [scenarioId, handleError, clearError]);
 
     // Memoize current task
     const currentTask = useMemo(() => {
@@ -89,12 +63,13 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         return tasks[activeTaskIndex];
     }, [scenario?.tasks, activeTaskIndex]);
 
-    // Get current task data from session
-    const currentTaskData = useMemo(() => {
-        return currentTask ? getTaskData(currentTask.id) : { status: 'pending', validationResult: null };
-    }, [currentTask, getTaskData]);
+    // Handle validation completion
+    const handleValidationComplete = (result) => {
+        console.log('Validation completed:', result);
+        // The session will be updated via SWR, no manual updates needed
+    };
 
-    if ((loading || sessionLoading) && !scenario && !session) {  // Only show loading if we have no data
+    if ((loading || sessionLoading) && !scenario && !session) {
         return <LoadingState message="Loading scenario details..." />;
     }
 
@@ -146,7 +121,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
             <div className={`border-b border-gray-200 overflow-x-auto ${showAllTasks ? 'block' : 'hidden lg:block'}`}>
                 <div className="flex">
                     {tasks.map((task, index) => {
-                        const taskData = getTaskData(task.id);
+                        const taskStatus = getTaskStatus(task.id);
                         return (
                             <button
                                 key={task.id}
@@ -160,7 +135,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                                     }`}
                             >
                                 <div className="flex items-center">
-                                    <StatusIndicator status={taskData.status} size="sm" />
+                                    <StatusIndicator status={taskStatus} size="sm" />
                                     <span className="ml-1 text-xs sm:text-sm">Task {index + 1}</span>
                                 </div>
                             </button>
@@ -171,14 +146,24 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
 
             {/* Progress summary */}
             {session && session.tasks && session.tasks.length > 0 && (
-                <ValidationDisplay
-                    mode="summary"
-                    validationResult={{
-                        success: session.tasks.every(t => t.status === 'completed'),
-                        details: session.tasks.map(t => ({ passed: t.status === 'completed' }))
-                    }}
-                    compact={true}
-                />
+                <div className="p-3 bg-gray-50 border-b">
+                    <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">Overall Progress</span>
+                        <div className="flex items-center space-x-2">
+                            <span className="text-sm text-gray-600">
+                                {session.tasks.filter(t => t.status === 'completed').length}/{session.tasks.length} completed
+                            </span>
+                            <div className="w-16 bg-gray-200 rounded-full h-2">
+                                <div
+                                    className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                                    style={{
+                                        width: `${(session.tasks.filter(t => t.status === 'completed').length / session.tasks.length) * 100}%`
+                                    }}
+                                />
+                            </div>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {/* Task content */}
@@ -187,12 +172,13 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                     <div className="flex justify-between items-start mb-4">
                         <h2 className="text-lg sm:text-xl font-medium text-gray-900 truncate">{currentTask?.title}</h2>
                         <StatusIndicator
-                            status={currentTaskData.status}
-                            label={currentTaskData.status === 'completed' ? 'Completed' :
-                                currentTaskData.status === 'failed' ? 'Failed' : 'Pending'}
+                            status={getTaskStatus(currentTask?.id)}
+                            label={getTaskStatus(currentTask?.id) === 'completed' ? 'Completed' :
+                                getTaskStatus(currentTask?.id) === 'failed' ? 'Failed' : 'Pending'}
                         />
                     </div>
 
+                    {/* Task Description */}
                     <Card className="mb-6">
                         <div className="prose prose-sm sm:prose-base prose-indigo max-w-none">
                             <ReactMarkdown>{currentTask?.description}</ReactMarkdown>
@@ -225,39 +211,16 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                         </div>
                     )}
 
-                    {/* Validation Objectives */}
-                    {currentTask?.validation && currentTask.validation.length > 0 && (
-                        <div className="mb-6">
-                            <ValidationDisplay
-                                mode="objectives"
-                                validationRules={currentTask.validation}
-                                validationResult={currentTaskData.validationResult}
-                            />
-                        </div>
-                    )}
-
-                    {/* Overall validation result */}
-                    {currentTaskData.validationResult && (
-                        <ValidationDisplay
-                            mode="detailed"
-                            validationResult={currentTaskData.validationResult}
-                            onRetry={() => handleValidateTask(currentTask.id)}
+                    {/* NEW: Unified Task Validation Component */}
+                    {currentTask && (
+                        <TaskValidation
+                            taskId={currentTask.id}
+                            sessionId={sessionId}
+                            validationRules={currentTask.validation || []}
+                            onValidationComplete={handleValidationComplete}
+                            className="mb-6"
                         />
                     )}
-
-                    {/* Validation button */}
-                    <div className="pt-4">
-                        <Button
-                            type="button"
-                            variant="primary"
-                            onClick={() => handleValidateTask(currentTask.id)}
-                            isLoading={isValidating}
-                            disabled={isValidating || currentTaskData.status === 'completed'}
-                            className="w-full sm:w-auto"
-                        >
-                            {isValidating ? 'Validating...' : 'Validate Task'}
-                        </Button>
-                    </div>
                 </div>
             </div>
         </div>

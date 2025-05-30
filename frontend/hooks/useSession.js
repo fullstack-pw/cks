@@ -25,12 +25,10 @@ export function useSession(sessionId) {
         isError: !!error,
         error: error,
 
-        // Actions from context
+        // Actions from context (removed validateTask)
         createSession: sessionContext.createSession,
         deleteSession: sessionContext.deleteSession,
         extendSession: sessionContext.extendSession,
-        validateTask: sessionContext.validateTask,
-        createTerminal: sessionContext.createTerminal,
 
         // SWR refresh
         refresh: mutate

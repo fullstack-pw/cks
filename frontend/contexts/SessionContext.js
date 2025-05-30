@@ -42,66 +42,8 @@ export const SessionProvider = ({ children }) => {
         }
     };
 
-    // Validate a task with proper cancellation and race condition handling
-    // Update the validateTask method to not cause page reloads
-    const validateTask = useCallback(async (sessionId, taskId) => {
-        const requestKey = `validate-${sessionId}-${taskId}`;
-
-        // Cancel any existing validation for this task
-        cancelActiveRequest(requestKey);
-
-        // Create new abort controller
-        const controller = new AbortController();
-        activeRequests.current.set(requestKey, controller);
-
-        try {
-            setLoading(true);
-            setError(null);
-
-            // Perform validation - no optimistic updates needed
-            const result = await api.tasks.validate(sessionId, taskId);
-
-            // Revalidate session data to get updated validation results
-            mutate(`/sessions/${sessionId}`);
-
-            // Show success toast only for successful validations
-            if (result.success) {
-                toast.success('Task validated successfully');
-            } else {
-                toast.error('Task validation failed');
-            }
-
-            return result;
-        } catch (err) {
-            // Check if request was cancelled
-            if (err.name === 'AbortError') {
-                console.log('Validation cancelled');
-                return {
-                    success: false,
-                    message: 'Validation cancelled',
-                    details: []
-                };
-            }
-
-            const processedError = ErrorHandler.handleError(
-                err,
-                'task:validate',
-                null
-            );
-
-            toast.error(processedError.message);
-
-            return {
-                success: false,
-                message: processedError.message,
-                details: processedError.details || []
-            };
-        } finally {
-            setLoading(false);
-            activeRequests.current.delete(requestKey);
-            // DO NOT call router.reload() or any page refresh here
-        }
-    }, [toast, cancelActiveRequest]);
+    // NOTE: Removed validateTask - now handled by TaskValidation component
+    // This simplifies the context and removes duplicate validation logic
 
     // Cleanup on unmount
     useEffect(() => {
@@ -123,7 +65,7 @@ export const SessionProvider = ({ children }) => {
             const result = await api.sessions.create(scenarioId);
             // Prefetch the session data for SWR
             mutate(`/sessions/${result.sessionId}`, result, false);
-            toast.success('Lab session created and ready!'); // Updated message
+            toast.success('Lab session created and ready!');
             router.push(`/lab/${result.sessionId}`);
             return result;
         } catch (err) {
@@ -204,10 +146,10 @@ export const SessionProvider = ({ children }) => {
         createSession,
         deleteSession,
         extendSession,
-        validateTask,
         clearError,
         fetcher
-    }), [loading, error, createSession, deleteSession, extendSession, validateTask, clearError, fetcher]);
+        // Removed validateTask - now handled by dedicated components
+    }), [loading, error, createSession, deleteSession, extendSession, clearError, fetcher]);
 
     return (
         <SessionContext.Provider value={value}>
