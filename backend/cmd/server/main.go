@@ -115,10 +115,13 @@ func main() {
 		logger.WithError(err).Fatal("Failed to create kubevirt client")
 	}
 
-	// Create validation engine
+	// Create validation engine (existing)
 	validationEngine := validation.NewEngine(kubevirtClient, logger)
 
-	// Create terminal manager
+	// Create unified validator (ADD THIS)
+	unifiedValidator := validation.NewUnifiedValidator(kubevirtClient, logger)
+
+	// Create terminal manager (existing)
 	terminalManager := terminal.NewManager(kubeClient, kubevirtClient, k8sConfig, logger)
 
 	// Create scenario manager first
@@ -146,7 +149,7 @@ func main() {
 	sessionManager.SetTerminalCleanupFunc(terminalService.CleanupSessionSSH)
 
 	// Create and register controllers
-	sessionController := controllers.NewSessionController(sessionService, logger)
+	sessionController := controllers.NewSessionController(sessionService, scenarioService, logger, unifiedValidator)
 	sessionController.RegisterRoutes(router)
 
 	terminalController := controllers.NewTerminalController(terminalService, sessionService, logger)
@@ -163,7 +166,7 @@ func main() {
 		Addr:         fmt.Sprintf("%s:%d", cfg.ServerHost, cfg.ServerPort),
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 60 * time.Second, // Longer timeout for WebSockets
+		WriteTimeout: 300 * time.Second, // Longer timeout for WebSockets
 		IdleTimeout:  60 * time.Second,
 	}
 

@@ -62,7 +62,6 @@ func (c *Client) buildVirtctlSSHArgs(namespace, vmName, username string, command
 		fmt.Sprintf("vmi/%s", vmName),
 		"--namespace=" + namespace,
 		"--username=" + username,
-		"--local-ssh=true",
 		"--local-ssh-opts=-o StrictHostKeyChecking=no",
 		"--local-ssh-opts=-o UserKnownHostsFile=/dev/null",
 		"--local-ssh-opts=-o LogLevel=ERROR",
@@ -670,89 +669,53 @@ func (c *Client) DeleteVMs(ctx context.Context, namespace string, vmNames ...str
 	return nil
 }
 
-func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string) (string, error) {
+// Update the method signature to include retry parameter
+func (c *Client) ExecuteCommandInVM(ctx context.Context, namespace, vmName, command string, retry ...bool) (string, error) {
+	// Default retry to true for backward compatibility
+	shouldRetry := true
+	if len(retry) > 0 {
+		shouldRetry = retry[0]
+	}
+
 	c.logger.WithFields(logrus.Fields{
 		"vmName":    vmName,
 		"namespace": namespace,
 		"command":   command,
-	}).Debug("Executing command in VM using virtctl SSH")
+		"retry":     shouldRetry,
+	}).Debug("Executing command in VM")
 
-	// Adjust the VM name to match the actual name pattern
-	actualVMName := vmName
-	if strings.HasPrefix(vmName, "cks-") && strings.Contains(vmName, namespace) {
-		// VM name already includes the namespace pattern
-		actualVMName = vmName
-	} else if strings.HasPrefix(vmName, "cks-") {
-		// Need to append namespace pattern
-		actualVMName = fmt.Sprintf("%s-%s", vmName, namespace)
+	// Rest of the existing logic, but wrap the actual execution
+	if shouldRetry {
+		// Use existing retry logic
+		var output string
+		err := c.retryOperation(ctx, fmt.Sprintf("ssh-execute-%s", vmName), func() error {
+			var cmdErr error
+			output, cmdErr = c.executeCommandDirect(ctx, namespace, vmName, command)
+			return cmdErr
+		})
+		return output, err
+	} else {
+		// Execute directly without retry
+		return c.executeCommandDirect(ctx, namespace, vmName, command)
+	}
+}
+
+// Extract the actual command execution logic into a separate method
+func (c *Client) executeCommandDirect(ctx context.Context, namespace, vmName, command string) (string, error) {
+	// Move the existing command execution logic here
+	args := c.buildVirtctlSSHArgs(namespace, vmName, "suporte", command)
+
+	cmd := exec.CommandContext(ctx, "virtctl", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		stderrStr := stderr.String()
+		return "", fmt.Errorf("SSH command execution failed on VM %s: %w, stderr: %s", vmName, err, stderrStr)
 	}
 
-	c.logger.WithField("actualVMName", actualVMName).Debug("Adjusted VM name for command execution")
-
-	var output string
-	err := c.retryOperation(ctx, fmt.Sprintf("ssh-execute-%s", vmName), func() error {
-		// Create the virtctl ssh command with proper arguments
-		args := c.buildVirtctlSSHArgs(namespace, vmName, "suporte", command)
-
-		c.logger.WithFields(logrus.Fields{
-			"virtctlArgs": args,
-			"vmName":      vmName,
-			"namespace":   namespace,
-			"command":     command,
-		}).Debug("Virtctl command arguments")
-
-		cmd := exec.CommandContext(ctx, "virtctl", args...)
-
-		// Create buffers for stdout and stderr
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
-
-		// Execute the command
-		if err := cmd.Run(); err != nil {
-			// Read error output
-			stderrStr := stderr.String()
-			stdoutStr := stdout.String()
-
-			c.logger.WithError(err).WithFields(logrus.Fields{
-				"stderr":    stderrStr,
-				"stdout":    stdoutStr,
-				"vmName":    vmName,
-				"namespace": namespace,
-				"command":   command,
-			}).Debug("SSH command execution failed (will retry if applicable)")
-
-			// Check for common SSH errors and provide better error messages
-			if strings.Contains(stderrStr, "Connection refused") {
-				return fmt.Errorf("SSH connection refused to VM %s - VM may not be ready yet", vmName)
-			}
-			if strings.Contains(stderrStr, "Host key verification failed") {
-				return fmt.Errorf("SSH host key verification failed for VM %s", vmName)
-			}
-			if strings.Contains(stderrStr, "Permission denied") {
-				return fmt.Errorf("SSH permission denied for VM %s - check username and authentication", vmName)
-			}
-			if strings.Contains(stderrStr, "No route to host") {
-				return fmt.Errorf("SSH no route to host for VM %s - network connectivity issue", vmName)
-			}
-
-			return fmt.Errorf("SSH command execution failed on VM %s: %w, stderr: %s", vmName, err, stderrStr)
-		}
-
-		output = stdout.String()
-		return nil
-	})
-
-	if err != nil {
-		return "", err
-	}
-
-	c.logger.WithFields(logrus.Fields{
-		"stdout": output,
-		"vmName": actualVMName,
-	}).Debug("Command executed successfully")
-
-	return output, nil
+	return stdout.String(), nil
 }
 
 // substituteEnvVars replaces ${VAR} with the value of the environment variable VAR

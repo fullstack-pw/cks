@@ -521,7 +521,6 @@ func (tm *Manager) buildVirtctlSSHArgs(namespace, vmName, username string) []str
 		fmt.Sprintf("vmi/%s", vmName),
 		"--namespace=" + namespace,
 		"--username=" + username,
-		"--local-ssh=true",
 		"--local-ssh-opts=-o StrictHostKeyChecking=no",
 		"--local-ssh-opts=-o UserKnownHostsFile=/dev/null",
 		"--local-ssh-opts=-o LogLevel=ERROR",

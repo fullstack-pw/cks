@@ -145,7 +145,7 @@ const TerminalComponent = dynamic(
                 // Calculate reconnect delay with exponential backoff
                 const calculateReconnectDelay = useCallback(() => {
                     const baseDelay = 1000; // 1 second
-                    const maxDelay = 30000; // 30 seconds
+                    const maxDelay = 120000; // 30 seconds
                     const delay = Math.min(baseDelay * Math.pow(1.5, reconnectAttempts.current), maxDelay);
 
                     // Add jitter to prevent thundering herd problem

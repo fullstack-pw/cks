@@ -10,21 +10,26 @@ import (
 
 	"github.com/fullstack-pw/cks/backend/internal/models"
 	"github.com/fullstack-pw/cks/backend/internal/services"
+	"github.com/fullstack-pw/cks/backend/internal/validation"
 	"github.com/gin-gonic/gin"
 	"github.com/sirupsen/logrus"
 )
 
 // SessionController handles HTTP requests related to sessions
 type SessionController struct {
-	sessionService services.SessionService
-	logger         *logrus.Logger
+	sessionService   services.SessionService
+	scenarioService  services.ScenarioService
+	logger           *logrus.Logger
+	unifiedValidator *validation.UnifiedValidator
 }
 
 // NewSessionController creates a new session controller
-func NewSessionController(sessionService services.SessionService, logger *logrus.Logger) *SessionController {
+func NewSessionController(sessionService services.SessionService, scenarioService services.ScenarioService, logger *logrus.Logger, unifiedValidator *validation.UnifiedValidator) *SessionController {
 	return &SessionController{
-		sessionService: sessionService,
-		logger:         logger,
+		sessionService:   sessionService,
+		scenarioService:  scenarioService,
+		logger:           logger,
+		unifiedValidator: unifiedValidator,
 	}
 }
 
@@ -158,27 +163,109 @@ func (sc *SessionController) ListTasks(c *gin.Context) {
 }
 
 // ValidateTask validates a specific task in a session
+// ValidateTask validates a specific task in a session using unified validator
 func (sc *SessionController) ValidateTask(c *gin.Context) {
 	sessionID := c.Param("id")
 	taskID := c.Param("taskId")
 
+	sc.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"taskID":    taskID,
+	}).Info("Starting unified task validation")
+
 	// Get session
-	_, err := sc.sessionService.GetSession(sessionID)
+	session, err := sc.sessionService.GetSession(sessionID)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("Session not found: %v", err)})
 		return
 	}
 
-	// Use session context for validation
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	// Get task validation rules
+	task, err := sc.getTaskWithValidationRules(session.ScenarioID, taskID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Check if task has validation rules
+	if len(task.Validation) == 0 {
+		// Return success for tasks without validation rules
+		response := &validation.ValidationResponse{
+			Success:   true,
+			Message:   "No validation rules defined for this task",
+			Results:   []validation.ValidationResult{},
+			Timestamp: time.Now(),
+		}
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
+	// Use unified validator
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 300*time.Second)
 	defer cancel()
 
-	// Validate the task
-	validationResults, err := sc.sessionService.ValidateTask(ctx, sessionID, taskID)
+	validationResponse, err := sc.unifiedValidator.ValidateTask(ctx, session, task.Validation)
 	if err != nil {
+		sc.logger.WithError(err).Error("Unified validation failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Validation failed: %v", err)})
 		return
 	}
 
-	c.JSON(http.StatusOK, validationResults)
+	// Update session with results (simplified)
+	sc.updateSessionTaskStatus(sessionID, taskID, validationResponse)
+
+	sc.logger.WithFields(logrus.Fields{
+		"sessionID": sessionID,
+		"taskID":    taskID,
+		"success":   validationResponse.Success,
+		"results":   len(validationResponse.Results),
+	}).Info("Sending validation response")
+
+	c.JSON(http.StatusOK, validationResponse)
+}
+
+// Helper method to get task with validation rules
+func (sc *SessionController) getTaskWithValidationRules(scenarioID, taskID string) (*models.Task, error) {
+	if scenarioID == "" {
+		return nil, fmt.Errorf("session has no associated scenario")
+	}
+
+	// Get scenario using the scenario service
+	scenario, err := sc.scenarioService.GetScenario(scenarioID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load scenario %s: %w", scenarioID, err)
+	}
+
+	// Find the specific task
+	for i, task := range scenario.Tasks {
+		if task.ID == taskID {
+			sc.logger.WithFields(logrus.Fields{
+				"scenarioID":      scenarioID,
+				"taskID":          taskID,
+				"validationRules": len(task.Validation),
+				"taskTitle":       task.Title,
+			}).Debug("Found task with validation rules")
+
+			return &scenario.Tasks[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("task %s not found in scenario %s", taskID, scenarioID)
+}
+
+// Helper method to update session task status
+func (sc *SessionController) updateSessionTaskStatus(sessionID, taskID string, response *validation.ValidationResponse) {
+	status := "failed"
+	if response.Success {
+		status = "completed"
+	}
+
+	// Use existing session service to update task status
+	err := sc.sessionService.UpdateTaskStatus(sessionID, taskID, status)
+	if err != nil {
+		sc.logger.WithError(err).WithFields(logrus.Fields{
+			"sessionID": sessionID,
+			"taskID":    taskID,
+		}).Error("Failed to update task status")
+	}
 }

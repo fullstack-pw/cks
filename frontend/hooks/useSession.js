@@ -10,7 +10,7 @@ export function useSession(sessionId) {
         sessionId ? `/sessions/${sessionId}` : null,
         sessionContext.fetcher,
         {
-            refreshInterval: 30000, // Reduced from 10s to 30s since no provisioning delays
+            refreshInterval: 120000, // Reduced from 10s to 30s since no provisioning delays
             revalidateOnFocus: true,
             dedupingInterval: 10000, // Increased deduplication
         }

@@ -4,7 +4,7 @@ import ErrorHandler from '../utils/errorHandler';
 
 // Use environment variable with fallback to localhost
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '/api/v1';
-const DEFAULT_TIMEOUT = 30000; // 30 seconds default timeout
+const DEFAULT_TIMEOUT = 120000; // 30 seconds default timeout
 
 /**
  * Enhanced API client for the CKS application
@@ -253,7 +253,7 @@ class ApiClient {
          */
         validate: (sessionId, taskId) => this.fetchWithRetry(`/sessions/${sessionId}/tasks/${taskId}/validate`, {
             method: 'POST'
-        }, 1, 60000), // Longer timeout for validation (60s) with 1 retry
+        }, 1, 120000), // Longer timeout for validation (60s) with 1 retry
         getValidationRules: (scenarioId, taskId) => this.fetchWithRetry(`/scenarios/${scenarioId}/tasks/${taskId}/validation`),
     };
 }
