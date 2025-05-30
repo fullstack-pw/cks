@@ -1226,3 +1226,160 @@ func (c *Client) IsVMSSHReady(ctx context.Context, namespace, vmName string) (bo
 
 	return isReady, nil
 }
+
+// CleanupOldRestores removes old VirtualMachineRestore objects and their associated PVCs
+func (c *Client) CleanupOldRestores(ctx context.Context, namespace string, vmNames ...string) error {
+	c.logger.WithFields(logrus.Fields{
+		"namespace": namespace,
+		"vmNames":   vmNames,
+	}).Info("Starting cleanup of old VM restore objects and PVCs")
+
+	startTime := time.Now()
+	var cleanupStats struct {
+		restoresDeleted int
+		pvcsDeleted     int
+		errors          []string
+	}
+
+	// Step 1: Find VirtualMachineRestore objects and collect their PVC names
+	c.logger.Debug("Listing VirtualMachineRestore objects for cleanup")
+	restores, err := c.virtClient.VirtualMachineRestore(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		c.logger.WithError(err).Warn("Failed to list VirtualMachineRestore objects, skipping restore cleanup")
+		return nil
+	}
+
+	// Create a pattern to match our VM names
+	vmNamePattern := strings.Join(vmNames, "|")
+	restorePattern := regexp.MustCompile(fmt.Sprintf("(%s).*restore", vmNamePattern))
+
+	// Collect PVC names before deleting restore objects
+	var restorePVCsToDelete []string
+
+	for _, restore := range restores.Items {
+		// Check if this restore is related to one of our VMs
+		isRelated := false
+
+		// Check by target VM name
+		if restore.Spec.Target.Name != "" {
+			for _, vmName := range vmNames {
+				if restore.Spec.Target.Name == vmName {
+					isRelated = true
+					break
+				}
+			}
+		}
+
+		// Also check by restore name pattern
+		if !isRelated && restorePattern.MatchString(restore.Name) {
+			isRelated = true
+		}
+
+		if isRelated {
+			c.logger.WithFields(logrus.Fields{
+				"restoreName": restore.Name,
+				"targetVM":    restore.Spec.Target.Name,
+				"age":         time.Since(restore.CreationTimestamp.Time),
+				"complete":    restore.Status != nil && restore.Status.Complete != nil && *restore.Status.Complete,
+			}).Info("Found VirtualMachineRestore for cleanup")
+
+			// Extract PVC names from restore status before deleting
+			if restore.Status != nil && restore.Status.Restores != nil {
+				for _, restoreInfo := range restore.Status.Restores {
+					if restoreInfo.PersistentVolumeClaimName != "" {
+						restorePVCsToDelete = append(restorePVCsToDelete, restoreInfo.PersistentVolumeClaimName)
+						c.logger.WithFields(logrus.Fields{
+							"restoreName": restore.Name,
+							"pvcName":     restoreInfo.PersistentVolumeClaimName,
+							"volumeName":  restoreInfo.VolumeName,
+						}).Debug("Collected PVC name for deletion")
+					}
+				}
+			}
+
+			// Delete the VirtualMachineRestore object
+			err := c.virtClient.VirtualMachineRestore(namespace).Delete(ctx, restore.Name, metav1.DeleteOptions{})
+			if err != nil && !k8serrors.IsNotFound(err) {
+				errMsg := fmt.Sprintf("failed to delete restore %s: %v", restore.Name, err)
+				c.logger.WithError(err).WithField("restoreName", restore.Name).Warn("Failed to delete VirtualMachineRestore")
+				cleanupStats.errors = append(cleanupStats.errors, errMsg)
+			} else {
+				cleanupStats.restoresDeleted++
+				c.logger.WithField("restoreName", restore.Name).Info("Deleted VirtualMachineRestore object")
+			}
+		}
+	}
+
+	// Step 2: Delete the collected restore PVCs
+	c.logger.WithField("pvcCount", len(restorePVCsToDelete)).Info("Deleting restore PVCs")
+	for _, pvcName := range restorePVCsToDelete {
+		c.logger.WithField("pvcName", pvcName).Info("Deleting restore PVC")
+
+		err := c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvcName, metav1.DeleteOptions{})
+		if err != nil && !k8serrors.IsNotFound(err) {
+			errMsg := fmt.Sprintf("failed to delete restore PVC %s: %v", pvcName, err)
+			c.logger.WithError(err).WithField("pvcName", pvcName).Warn("Failed to delete restore PVC")
+			cleanupStats.errors = append(cleanupStats.errors, errMsg)
+		} else {
+			cleanupStats.pvcsDeleted++
+			c.logger.WithField("pvcName", pvcName).Info("Successfully deleted restore PVC")
+		}
+	}
+
+	// Step 3: Also clean up any orphaned restore PVCs (fallback cleanup)
+	c.logger.Debug("Scanning for orphaned restore PVCs")
+	pvcs, err := c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		c.logger.WithError(err).Warn("Failed to list PVCs for orphan cleanup")
+	} else {
+		// Look for PVCs that match restore patterns but weren't in our collected list
+		restoreOrphanPattern := regexp.MustCompile(`^restore-[a-f0-9-]+-.*`)
+
+		for _, pvc := range pvcs.Items {
+			if restoreOrphanPattern.MatchString(pvc.Name) {
+				// Check if we already processed this PVC
+				alreadyProcessed := false
+				for _, processedPVC := range restorePVCsToDelete {
+					if processedPVC == pvc.Name {
+						alreadyProcessed = true
+						break
+					}
+				}
+
+				if !alreadyProcessed {
+					c.logger.WithFields(logrus.Fields{
+						"pvcName": pvc.Name,
+						"age":     time.Since(pvc.CreationTimestamp.Time),
+					}).Info("Found orphaned restore PVC, deleting")
+
+					err := c.kubeClient.CoreV1().PersistentVolumeClaims(namespace).Delete(ctx, pvc.Name, metav1.DeleteOptions{})
+					if err != nil && !k8serrors.IsNotFound(err) {
+						errMsg := fmt.Sprintf("failed to delete orphaned restore PVC %s: %v", pvc.Name, err)
+						c.logger.WithError(err).WithField("pvcName", pvc.Name).Warn("Failed to delete orphaned restore PVC")
+						cleanupStats.errors = append(cleanupStats.errors, errMsg)
+					} else {
+						cleanupStats.pvcsDeleted++
+						c.logger.WithField("pvcName", pvc.Name).Info("Successfully deleted orphaned restore PVC")
+					}
+				}
+			}
+		}
+	}
+
+	// Log cleanup summary
+	elapsed := time.Since(startTime)
+	c.logger.WithFields(logrus.Fields{
+		"namespace":       namespace,
+		"restoresDeleted": cleanupStats.restoresDeleted,
+		"pvcsDeleted":     cleanupStats.pvcsDeleted,
+		"errors":          len(cleanupStats.errors),
+		"duration":        elapsed,
+	}).Info("Cleanup of old restore objects and PVCs completed")
+
+	// Log errors if any
+	if len(cleanupStats.errors) > 0 {
+		c.logger.WithField("errors", cleanupStats.errors).Warn("Some cleanup operations failed")
+	}
+
+	return nil
+}

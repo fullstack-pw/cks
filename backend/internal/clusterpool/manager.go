@@ -160,6 +160,7 @@ func (m *Manager) ReleaseCluster(sessionID string) error {
 
 // ReleaseAllClusters releases all clusters in the pool regardless of assignment
 func (m *Manager) ReleaseAllClusters() error {
+
 	m.lock.Lock()
 	defer m.lock.Unlock()
 
@@ -199,7 +200,7 @@ func (m *Manager) ReleaseAllClusters() error {
 	m.logger.WithFields(logrus.Fields{
 		"releasedClusters": releasedClusters,
 		"totalReleased":    len(releasedClusters),
-	}).Info("Released all applicable clusters")
+	}).Info("Released all applicable clusters - cleanup will remove old restore PVCs during reset")
 
 	return nil
 }
@@ -272,7 +273,7 @@ func (m *Manager) MarkClusterAvailable(clusterID string) error {
 
 // resetClusterAsync performs cluster reset in background using snapshots
 func (m *Manager) resetClusterAsync(clusterID string) {
-	m.logger.WithField("clusterID", clusterID).Info("Starting real cluster reset from snapshots")
+	m.logger.WithField("clusterID", clusterID).Info("Starting cluster reset from snapshots with cleanup")
 
 	// Mark as resetting and persist
 	m.lock.Lock()
@@ -282,7 +283,7 @@ func (m *Manager) resetClusterAsync(clusterID string) {
 	}
 	m.lock.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute) // Increased timeout for cleanup
 	defer cancel()
 
 	m.lock.RLock()
@@ -294,19 +295,39 @@ func (m *Manager) resetClusterAsync(clusterID string) {
 		return
 	}
 
+	// Step 1: Stop the VMs first
+	m.logger.WithField("clusterID", clusterID).Info("Stopping VMs before cleanup and restore")
+	err := m.kubevirtClient.StopVMs(ctx, cluster.Namespace, cluster.ControlPlaneVM, cluster.WorkerNodeVM)
+	if err != nil {
+		m.logger.WithError(err).WithField("clusterID", clusterID).Warn("Failed to stop VMs, continuing with reset")
+	}
+
+	// Step 2: Clean up old restore objects and PVCs
+	m.logger.WithField("clusterID", clusterID).Info("Cleaning up old restore objects and PVCs")
+	err = m.kubevirtClient.CleanupOldRestores(ctx, cluster.Namespace, cluster.ControlPlaneVM, cluster.WorkerNodeVM)
+	if err != nil {
+		m.logger.WithError(err).WithField("clusterID", clusterID).Warn("Cleanup of old restores failed, continuing with restore")
+		// Don't fail the reset process due to cleanup issues
+	}
+
+	// Wait a bit for cleanup to complete
+	time.Sleep(10 * time.Second)
+
 	// Generate snapshot names (matching the pattern from snapshot creation)
 	cpSnapshotName := fmt.Sprintf("cp-%s-snapshot", clusterID)
 	wkSnapshotName := fmt.Sprintf("wk-%s-snapshot", clusterID)
 
-	// Restore control plane VM from snapshot
-	err := m.kubevirtClient.RestoreVMFromSnapshot(ctx, cluster.Namespace, cluster.ControlPlaneVM, cpSnapshotName)
+	// Step 3: Restore control plane VM from snapshot
+	m.logger.WithField("clusterID", clusterID).Info("Restoring control plane VM from snapshot")
+	err = m.kubevirtClient.RestoreVMFromSnapshot(ctx, cluster.Namespace, cluster.ControlPlaneVM, cpSnapshotName)
 	if err != nil {
 		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to restore control plane VM")
 		m.markClusterError(clusterID, err)
 		return
 	}
 
-	// Restore worker VM from snapshot
+	// Step 4: Restore worker VM from snapshot
+	m.logger.WithField("clusterID", clusterID).Info("Restoring worker VM from snapshot")
 	err = m.kubevirtClient.RestoreVMFromSnapshot(ctx, cluster.Namespace, cluster.WorkerNodeVM, wkSnapshotName)
 	if err != nil {
 		m.logger.WithError(err).WithField("clusterID", clusterID).Error("Failed to restore worker VM")
@@ -323,7 +344,7 @@ func (m *Manager) resetClusterAsync(clusterID string) {
 	}
 	m.lock.Unlock()
 
-	m.logger.WithField("clusterID", clusterID).Info("Cluster reset completed successfully")
+	m.logger.WithField("clusterID", clusterID).Info("Cluster reset completed successfully with cleanup")
 }
 
 // markClusterError marks a cluster as in error state
