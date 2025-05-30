@@ -45,8 +45,3 @@ type ScenarioService interface {
 	GetCategories() (map[string]string, error)
 	ReloadScenarios() error
 }
-
-// ValidationService defines the interface for validation-related operations
-type ValidationService interface {
-	ValidateTask(ctx context.Context, session *models.Session, task models.Task) (*models.ValidationResponse, error)
-}

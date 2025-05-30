@@ -52,20 +52,20 @@ const (
 	SessionStatusFailed SessionStatus = "failed"
 )
 
-// TaskStatus represents the status of a task in a scenario
 type TaskStatus struct {
-	ID               string            `json:"id"`
-	Status           string            `json:"status"` // "pending", "completed", "failed"
-	ValidationTime   time.Time         `json:"validationTime,omitempty"`
-	Message          string            `json:"message,omitempty"`
-	ValidationResult *ValidationResult `json:"validationResult,omitempty"` // NEW
+	ID               string                 `json:"id"`
+	Status           string                 `json:"status"` // "pending", "completed", "failed"
+	ValidationTime   time.Time              `json:"validationTime,omitempty"`
+	Message          string                 `json:"message,omitempty"`
+	ValidationResult *ValidationResponseRef `json:"validationResult,omitempty"`
 }
 
-type ValidationResult struct {
-	Success   bool               `json:"success"`
-	Message   string             `json:"message"`
-	Details   []ValidationDetail `json:"details"`
-	Timestamp time.Time          `json:"timestamp"`
+// ValidationResponseRef stores a reference to validation results
+type ValidationResponseRef struct {
+	Success   bool      `json:"success"`
+	Message   string    `json:"message"`
+	Timestamp time.Time `json:"timestamp"`
+	// Note: Detailed results are returned via API, not stored in session
 }
 
 // Scenario represents a CKS practice scenario
@@ -160,31 +160,6 @@ type TerminalSession struct {
 	Target     string    `json:"target"` // "control-plane" or "worker-node"
 	Status     string    `json:"status"` // "connected", "disconnected"
 	CreateTime time.Time `json:"createTime"`
-}
-
-// ValidationRequest represents a request to validate a task
-type ValidationRequest struct {
-	SessionID string `json:"sessionId"`
-	TaskID    string `json:"taskId"`
-}
-
-// ValidationResponse represents a response from task validation
-type ValidationResponse struct {
-	Success bool               `json:"success"`
-	Message string             `json:"message"`
-	Details []ValidationDetail `json:"details,omitempty"`
-}
-
-// ValidationDetail represents detailed validation results
-type ValidationDetail struct {
-	Rule         string      `json:"rule"`
-	Passed       bool        `json:"passed"`
-	Message      string      `json:"message,omitempty"`
-	Expected     interface{} `json:"expected,omitempty"`
-	Actual       interface{} `json:"actual,omitempty"`
-	Description  string      `json:"description,omitempty"`
-	Type         string      `json:"type,omitempty"`
-	ErrorDetails string      `json:"errorDetails,omitempty"`
 }
 
 // CreateSessionRequest represents a request to create a new session

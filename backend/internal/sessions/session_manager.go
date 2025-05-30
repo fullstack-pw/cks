@@ -455,7 +455,6 @@ func (sm *SessionManager) ValidateTask(ctx context.Context, sessionID, taskID st
 	return result, nil
 }
 
-// NEW METHOD: Store validation results in session
 func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, status string, validationResult *validation.ValidationResponse) error {
 	sm.lock.Lock()
 	defer sm.lock.Unlock()
@@ -471,10 +470,9 @@ func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, s
 		if task.ID == taskID {
 			session.Tasks[i].Status = status
 			session.Tasks[i].ValidationTime = time.Now()
-			session.Tasks[i].ValidationResult = &models.ValidationResult{
+			session.Tasks[i].ValidationResult = &models.ValidationResponseRef{
 				Success:   validationResult.Success,
 				Message:   validationResult.Message,
-				Details:   convertValidationDetails(validationResult.Results),
 				Timestamp: time.Now(),
 			}
 			found = true
@@ -488,10 +486,9 @@ func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, s
 			ID:             taskID,
 			Status:         status,
 			ValidationTime: time.Now(),
-			ValidationResult: &models.ValidationResult{
+			ValidationResult: &models.ValidationResponseRef{
 				Success:   validationResult.Success,
 				Message:   validationResult.Message,
-				Details:   convertValidationDetails(validationResult.Results),
 				Timestamp: time.Now(),
 			},
 		})
@@ -505,24 +502,6 @@ func (sm *SessionManager) UpdateTaskValidationResult(sessionID, taskID string, s
 	}).Info("Task validation result stored in session")
 
 	return nil
-}
-
-// convertValidationDetails converts validation.ValidationResult to models.ValidationDetail
-func convertValidationDetails(results []validation.ValidationResult) []models.ValidationDetail {
-	details := make([]models.ValidationDetail, len(results))
-	for i, result := range results {
-		details[i] = models.ValidationDetail{
-			Rule:         result.RuleID,
-			Passed:       result.Passed,
-			Message:      result.Message,
-			Expected:     result.Expected,
-			Actual:       result.Actual,
-			Description:  "",
-			Type:         result.RuleType,
-			ErrorDetails: result.ErrorCode,
-		}
-	}
-	return details
 }
 
 // RegisterTerminalSession registers a terminal session for a VM
