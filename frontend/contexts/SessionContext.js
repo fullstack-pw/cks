@@ -193,25 +193,6 @@ export const SessionProvider = ({ children }) => {
         }
     };
 
-    // Create a terminal session with enhanced error handling
-    const createTerminal = async (sessionId, target) => {
-        try {
-            const result = await api.terminals.create(sessionId, target);
-            toast.success(`Terminal created for ${target}`);
-            return result;
-        } catch (err) {
-            // Use our error handler to process the error
-            const processedError = ErrorHandler.handleError(
-                err,
-                'terminal:create',
-                toast.error
-            );
-
-            setError(processedError);
-            throw processedError;
-        }
-    };
-
     // Add a function to clear errors
     const clearError = () => {
         setError(null);
@@ -224,10 +205,9 @@ export const SessionProvider = ({ children }) => {
         deleteSession,
         extendSession,
         validateTask,
-        createTerminal,
         clearError,
         fetcher
-    }), [loading, error, createSession, deleteSession, extendSession, validateTask, createTerminal, clearError, fetcher]);
+    }), [loading, error, createSession, deleteSession, extendSession, validateTask, clearError, fetcher]);
 
     return (
         <SessionContext.Provider value={value}>
