@@ -11,6 +11,20 @@ export class ErrorHandler {
    * @returns {Object} Standardized error object
    */
   static processApiError(error, context = 'api') {
+    // Handle null/undefined errors
+    if (!error) {
+      console.warn(`processApiError called with null/undefined error in ${context}`);
+      return {
+        message: 'An unexpected error occurred',
+        context,
+        timestamp: new Date().toISOString(),
+        status: 500,
+        isTimeout: false,
+        details: null,
+        originalError: null,
+      };
+    }
+
     console.error(`Error in ${context}:`, error);
 
     // Default error structure

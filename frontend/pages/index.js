@@ -8,6 +8,7 @@ import ScenarioList from '../components/ScenarioList';
 import api from '../lib/api';
 import { useSession } from '../hooks/useSession';
 import { PageHeader, ErrorState } from '../components/common';
+import { useError } from '../hooks/useError';
 
 export default function Home() {
     const router = useRouter();
@@ -15,7 +16,7 @@ export default function Home() {
     const [scenarios, setScenarios] = useState([]);
     const [categories, setCategories] = useState({});
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const { error, handleError, clearError } = useError('scenarios');
     const [filters, setFilters] = useState({
         category: '',
         difficulty: '',
@@ -33,10 +34,9 @@ export default function Home() {
                 ]);
                 setScenarios(scenariosData);
                 setCategories(categoriesData);
-                setError(null);
+                handleError(null);
             } catch (err) {
-                console.error('Error fetching data:', err);
-                setError(err.message || 'Failed to load scenarios');
+                handleError(err, 'fetch-data');
             } finally {
                 setLoading(false);
             }
@@ -58,7 +58,7 @@ export default function Home() {
             // Note: The router.push is now handled in the createSession function
         } catch (err) {
             console.error('Failed to create session:', err);
-            setError('Failed to create session. Please try again.');
+            handleError(new Error('Failed to create session. Please try again.'), 'create-session');
             setLoading(false);
         }
     };
@@ -85,8 +85,11 @@ export default function Home() {
             {error && !loading && (
                 <ErrorState
                     message="Failed to load scenarios"
-                    details={error}
-                    onRetry={() => window.location.reload()}
+                    details={typeof error === 'object' ? error.message || JSON.stringify(error) : error}
+                    onRetry={() => {
+                        clearError();
+                        window.location.reload();
+                    }}
                 />
             )}
 

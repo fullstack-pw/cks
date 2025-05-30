@@ -5,6 +5,7 @@ import { useSession } from '../hooks/useSession';
 import { Button, Card, ErrorState, LoadingState, StatusIndicator } from './common';
 import ValidationResult from './ValidationResult';
 import ValidationSummary from './ValidationSummary';
+import { useError } from '../hooks/useError';
 
 // Simple ValidationObjectives component that reads from session data
 const ValidationObjectives = React.memo(({ rules, taskValidationResult }) => {
@@ -128,7 +129,7 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
     const [activeTaskIndex, setActiveTaskIndex] = useState(0);
     const [showHints, setShowHints] = useState({});
     const [loading, setLoading] = useState(true);
-    const [error, setError] = useState(null);
+    const { error, handleError, clearError } = useError('task-panel');
     const [showAllTasks, setShowAllTasks] = useState(false);
     const [isValidating, setIsValidating] = useState(false);
 
@@ -187,10 +188,9 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
                 }
                 const data = await response.json();
                 setScenario(data);
-                setError(null);
+                clearError();
             } catch (err) {
-                setError(err.message || 'Failed to load scenario details');
-                console.error('Error fetching scenario:', err);
+                handleError(err, 'fetch-scenario');
             } finally {
                 setLoading(false);
             }
@@ -218,8 +218,11 @@ const TaskPanel = ({ sessionId, scenarioId }) => {
         return (
             <ErrorState
                 message="Failed to load scenario"
-                details={error}
-                onRetry={() => window.location.reload()}
+                details={error.message}
+                onRetry={() => {
+                    clearError();
+                    window.location.reload();
+                }}
             />
         );
     }

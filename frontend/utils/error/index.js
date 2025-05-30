@@ -1,11 +1,11 @@
 // frontend/utils/error/index.js
 import ErrorHandler from '../errorHandler';
-import { useErrorBoundary } from '../../hooks/useErrorBoundary';
+import { useError } from '../../hooks/useError';
 import ErrorBoundary, { useErrorHandler } from '../../components/ErrorBoundary';
 
 export {
   ErrorHandler,
-  useErrorBoundary,
+  useError,
   ErrorBoundary,
   useErrorHandler
 };

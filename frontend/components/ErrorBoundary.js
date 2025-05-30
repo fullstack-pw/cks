@@ -3,6 +3,7 @@
 import React from 'react';
 import { ErrorState, Button } from './common';
 import ErrorHandler from '../utils/errorHandler';
+import { useError } from '../hooks/useError';
 
 class ErrorBoundary extends React.Component {
     constructor(props) {
@@ -125,6 +126,7 @@ class ErrorBoundary extends React.Component {
 
 // Create a hook for functional components to throw errors safely
 export const useErrorHandler = (givenError, context = 'component') => {
+    const { handleError } = useError(context, { showToast: false });
     const [error, setError] = React.useState(null);
 
     if (givenError && !error) {
@@ -132,7 +134,7 @@ export const useErrorHandler = (givenError, context = 'component') => {
     }
 
     if (error) {
-        const processedError = ErrorHandler.processApiError(error, context);
+        const processedError = handleError(error);
         throw processedError;
     }
 };
