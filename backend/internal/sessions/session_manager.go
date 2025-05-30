@@ -608,7 +608,7 @@ func (sm *SessionManager) setupResourceQuotas(ctx context.Context, namespace str
 		},
 		Spec: corev1.ResourceQuotaSpec{
 			Hard: corev1.ResourceList{
-				corev1.ResourceCPU:    resource.MustParse("8"),    // Increased from 4
+				corev1.ResourceCPU:    resource.MustParse("16"),   // Increased from 4
 				corev1.ResourceMemory: resource.MustParse("16Gi"), // Increased from 8Gi
 				corev1.ResourcePods:   resource.MustParse("20"),   // Increased from 10
 			},

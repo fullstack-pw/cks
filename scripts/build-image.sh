@@ -10,7 +10,7 @@ BASE_IMAGE="ubuntu-22.04-server-cloudimg-amd64.img"
 TEMP_DIR=$(mktemp -d)
 MOUNT_DIR="${TEMP_DIR}/mnt"
 HTTP_SERVER_PORT=8000
-PVC_NAME="golden-image-${K8S_VERSION//./-}"
+PVC_NAME="new-golden-image-${K8S_VERSION//./-}"
 NAMESPACE="vm-templates"
 STORAGECLASS="longhorn"
 
@@ -22,15 +22,19 @@ if [ ! -f "${BASE_IMAGE}" ]; then
     wget -q "https://cloud-images.ubuntu.com/releases/22.04/release/${BASE_IMAGE}"
 fi
 
+# Install necessary tools for image manipulation
+sudo dnf update
+sudo dnf install virt-manager qemu-kvm libvirt libguestfs-tools libguestfs-tools-c
+
 # Create a copy of the base image
 cp "${BASE_IMAGE}" "${OUTPUT_IMAGE}"
 
 # Resize the image to have enough space
-qemu-img resize "${OUTPUT_IMAGE}" +3G
-
-# Install necessary tools for image manipulation
-sudo dnf update
-sudo dnf install virt-manager qemu-kvm libvirt libguestfs-tools libguestfs-tools-c
+qemu-img resize "${OUTPUT_IMAGE}" +5G
+virt-customize -a "${OUTPUT_IMAGE}" \
+  --run-command "mount" \
+  --run-command "growpart /dev/sda 1" \
+  --run-command "resize2fs /dev/sda1"
 
 # Create mount directory
 mkdir -p "${MOUNT_DIR}"
@@ -41,9 +45,6 @@ echo "Customizing image..."
 virt-customize -a "${OUTPUT_IMAGE}" \
   --update \
   --install apt-transport-https,ca-certificates,curl,gnupg,lsb-release,net-tools,ipvsadm,jq,ncat,vim,nano,software-properties-common,cloud-utils \
-  --run-command "mount" \
-  --run-command "growpart /dev/sda 1" \
-  --run-command "resize2fs /dev/sda1" \
   --run-command "modprobe overlay || true" \
   --run-command "modprobe br_netfilter || true" \
   --run-command "echo 'overlay' > /etc/modules-load.d/containerd.conf" \
@@ -144,8 +145,8 @@ spec:
       mountPath: /data
     resources:
       limits:
-        cpu: "2000m"
-        memory: "2Gi"
+        cpu: "500m"
+        memory: "1Gi"
   restartPolicy: Never
 EOF
 

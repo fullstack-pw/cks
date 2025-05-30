@@ -19,11 +19,13 @@ spec:
         session: ${SESSION_ID}
     spec:
       domain:
-        cpu:
-          cores: ${CPU_CORES}
         resources:
           requests:
             memory: ${MEMORY}
+            cpu: ${CPU_CORES}
+          limits:
+            memory: ${MEMORY}
+            cpu: ${CPU_CORES}
         devices:
           disks:
             - name: rootdisk
